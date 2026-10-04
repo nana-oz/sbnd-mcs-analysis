@@ -1,0 +1,688 @@
+#ifndef CAF_CAFMAKERPARAMS_H
+#define CAF_CAFMAKERPARAMS_H
+
+#include "fhiclcpp/types/Table.h"
+#include "fhiclcpp/types/OptionalTable.h"
+#include "fhiclcpp/types/Sequence.h"
+#include "fhiclcpp/types/OptionalSequence.h"
+#include "canvas/Utilities/InputTag.h"
+#include "nurandom/RandomUtils/NuRandomService.h" // rndm::SeedAtom (NOTE: could be replicated instead)
+
+
+namespace caf
+{
+  struct CAFMakerParams
+  {
+    template<class T> using Atom = fhicl::Atom<T>;
+    template<class T> using Sequence = fhicl::Sequence<T>;
+    template<class T> using Table = fhicl::Table<T>;
+    template<class T> using OptionalTable = fhicl::OptionalTable<T>;
+    using Comment  = fhicl::Comment;
+    using Name     = fhicl::Name;
+    using string   = std::string;
+    using InputTag = art::InputTag;
+
+    Atom<bool> CreateCAF { Name("CreateCAF"),
+      Comment("Whether to produce an output file in CAF format"), true
+    };
+
+    Atom<bool> CreateFlatCAF { Name("CreateFlatCAF"),
+      Comment("Whether to produce an output file in FlatCAF format"), true
+    };
+
+    Atom<bool> CreateBlindedCAF { Name("CreateBlindedCAF"),
+      Comment("Whether to produce output files with one consisting of a fraction of events and the other consisting of the remainder of the events with critical information obscured"), true
+    };
+
+    Atom<std::string> CAFFilename { Name("CAFFilename"),
+      Comment("Provide a string to override the automatic filename."), ""
+    };
+
+    Atom<std::string> FlatCAFFilename { Name("FlatCAFFilename"),
+      Comment("Provide a string to override the automatic filename."), ""
+    };
+
+    Atom<bool> SaveGENIEEventRecord { Name("SaveGENIEEventRecord"),
+      Comment("Whether to produce GENIE event record to the output file"), false
+    };
+    
+    Atom<bool> OverrideRealData { Name("OverrideRealData"),
+	      Comment("when true, some algorithms (e.g. PoT count) treat events as MC rather than real data -- e.g. set it if the event is an overlay"), false
+    };
+
+    Atom<float> PrescaleFactor { Name("PrescaleFactor"),
+	Comment("Factor by which to prescale unblind events"), 10
+    };
+
+    Atom<int> POTBlindSeed { Name("POTBlindNum"),
+	Comment("Integer used to derive POT scaling factor for blind events"), 655277
+    };
+
+    rndm::SeedAtom FakeRecoRandomSeed { Name("FakeRecoRandomSeed"),
+      Comment("fix the random seed for the truth-based reconstruction")
+      };
+
+    rndm::SeedAtom BlindingRandomSeed { Name("BlindingRandomSeed"),
+      Comment("fix the random seed for the blinding")
+      };
+
+    Atom<std::string> DetectorOverride { Name("DetectorOverride"),
+      Comment("Override the automatically detectected detector using 'sbnd' or 'icarus'. This parameter should usually be unset - ''"),
+      ""
+    };
+
+    Atom<string> DataTier        { Name("DataTier") };
+    Atom<string> FileExtension   { Name("FileExtension"), ".caf.root" };
+    Atom<string> FlatCAFFileExtension { Name("FlatCAFFileExtension"), ".flat.caf.root" };
+    Atom<string> UnblindFileExtension   { Name("UnblindFileExtension"), ".Unblind.DONOTLOOK.dum" };
+    Atom<string> BlindFileExtension { Name("BlindFileExtension"), ".Blind.OKTOLOOK.dum" };
+    Atom<string> PrescaleFileExtension { Name("PrescaleFileExtension"), ".Prescaled.OKTOLOOK.dum" };
+
+    Atom<string> GeneratorLabel  { Name("GeneratorInput") };
+
+    Atom<bool> StrictMode        { Name("StrictMode"),
+	Comment("Abort if any required product not found, unless label is empty")
+    };
+
+    Atom<bool> CutClearCosmic {
+      Name("CutClearCosmic"),
+      Comment("Cut slices which are marked as a 'clear-cosmic' by pandora"),
+      false
+    };
+
+    Atom<bool> SelectOneSlice {
+      Name("SelectOneSlice"),
+      Comment("Only select one slice per spill (ranked by nu_score) [TODO: implement]."),
+      false
+    };
+
+    fhicl::OptionalSequence<std::string> PandoraTagSuffixes {
+      Name("PandoraTagSuffixes"),
+      Comment("List of suffixes to add to TPC reco tag names (e.g. cryo0 cryo1)")
+    };
+
+    Atom<string> BNBPOTDataLabel {
+      Name("BNBPOTDataLabel"),
+      Comment("Label of BNBRetriever module"),
+      "bnbinfo"
+    };
+
+    Atom<string> NuMIPOTDataLabel {
+      Name("NuMIPOTDataLabel"),
+      Comment("Label of NuMIRetriever module"),
+      "numiinfo"
+    };
+
+    Atom<string> OffbeamBNBCountDataLabel {
+      Name("OffbeamBNBCountDataLabel"),
+      Comment("Label of BNB EXT module"),
+      "bnbextinfo"
+    };
+
+    Atom<string> OffbeamNuMICountDataLabel {
+      Name("OffbeamNuMICountDataLabel"),
+      Comment("Label of NuMI EXT module"),
+      "numiextinfo"
+    };
+
+    Atom<string> G4Label {
+      Name("G4Label"),
+      Comment("Label of G4 module."),
+      "largeant"
+    };
+
+    Atom<string> GenLabel {
+      Name("GenLabel"),
+      Comment("Label of neutrino gen module."),
+      "generator"
+    };
+
+    Atom<string> CosmicGenLabel {
+      Name("CosmicGenLabel"),
+      Comment("Label of cosmic gen module."),
+      "cosmgen"
+    };
+
+    Atom<string> ParticleGunGenLabel {
+      Name("ParticleGunGenLabel"),
+      Comment("Label of particle gun gen module."),
+      "particlegun"
+    };
+
+    Atom<string> PFParticleLabel {
+      Name("PFParticleLabel"),
+      Comment("Base label of PFParticle producer."),
+      "pandora"
+    };
+
+    Atom<string> CNNScoreLabel {
+      Name("CNNScoreLabel"),
+      Comment("Base label of CNN score producer."),
+      "cnnid"
+    };
+
+    Atom<string> StubLabel {
+      Name("StubLabel"),
+      Comment("Base label of Stub producer."),
+      "vertexStub"
+    };
+
+    Atom<string> FlashMatchLabel {
+      Name("FlashMatchLabel"),
+      Comment("Base label of flash match producer."),
+      "fmatch" // same for icarus and sbnd
+    };
+
+    fhicl::OptionalSequence<std::string> FlashMatchOpDetSuffixes {
+      Name("FlashMatchOpDetSuffixes"),
+      Comment("List of suffixes to add to SimpleFlash to denote Simple/Op Flashes and PDS subsystem (SBND)")
+    };
+
+    fhicl::OptionalSequence<std::string> FlashMatchSCECryoSuffixes {
+      Name("FlashMatchSCECryoSuffixes"),
+      Comment("List of suffixes to add to SimpleFlash to denote whether SCE implemented and cryostat (ICARUS)")
+    };
+
+    Atom<string> CRUMBSLabel {
+      Name("CRUMBSLabel"),
+      Comment("Base label of CRUMBS ID producer."),
+      "crumbs"
+    };
+
+    Atom<string> OpT0Label {
+      Name("OpT0Label"),
+      Comment("Base label of OpT0Finder producer"),
+      "opt0finder"
+    };
+
+    Atom<bool> FillHits {
+      Name("FillHits"),
+      Comment("Label deciding if you want to fill SRHits"),
+      false // default is false; set to true if you want SRHits filled
+    };
+
+    Atom<string> HitLabel {
+      Name("HitLabel"),
+      Comment("Base label of the TPC Hit producer."),
+      "gaushit"
+    };
+
+    Atom<string> RecoTrackLabel {
+      Name("RecoTrackLabel"),
+      Comment("Base label of reco-base track producer."),
+      "pandoraTrack"
+    };
+
+    Atom<string> RecoShowerLabel {
+      Name("RecoShowerLabel"),
+      Comment("Base label of reco-base shower producer."),
+      "pandoraShowerSBN"
+    };
+
+    Atom<string> ShowerRazzleLabel {
+      Name("ShowerRazzleLabel"),
+      Comment("Base label of shower mva particle-id producer."),
+      "pandoraShowerRazzle"
+    };
+
+    Atom<string> PFPRazzledLabel {
+      Name("PFPRazzledLabel"),
+      Comment("Base label of pfp mva particle-id producer."),
+      "pandoraRazzled"
+    };
+
+    Atom<string> RecoShowerSelectionLabel {
+      Name("RecoShowerSelectionLabel"),
+      Comment("Base label of shower selection vars producer."),
+      "pandoraShowerSelectionVars"
+    };
+
+    Atom<string> ShowerCosmicDistLabel {
+      Name("ShowerCosmicDistLabel"),
+      Comment("Base label of shower selection vars producer."),
+      "pandoraShowerCosmicDist"
+    };
+
+    Atom<string> TrackCaloLabel {
+      Name("TrackCaloLabel"),
+      Comment("Base label of track calorimetry producer."),
+      "pandoraCalo"
+    };
+
+    Atom<string> TrackChi2PidLabel {
+      Name("TrackChi2PidLabel"),
+      Comment("Base label of track chi2 particle-id producer."),
+      "pandoraPid"
+    };
+
+    Atom<string> TrackLikePidLabel {
+      Name("TrackLikePidLabel"),
+      Comment("Base label of track likelihood particle-id producer."),
+      "pandoraLikePid"
+    };
+
+    Atom<string> TrackScatterClosestApproachLabel {
+      Name("TrackScatterClosestApproachLabel"),
+      Comment("Base label of track track scatter closestapproach producer."),
+      "pandoraTrackClosestApproach"
+    };
+
+    Atom<string> TrackStoppingChi2FitLabel {
+      Name("TrackStoppingChi2FitLabel"),
+      Comment("Base label of track stopping chi2 fit producer."),
+      "pandoraTrackStoppingChi2"
+    };
+
+    Atom<string> TrackDazzleLabel {
+      Name("TrackDazzleLabel"),
+      Comment("Base label of track mva particle-id producer."),
+      "pandoraTrackDazzle"
+    };
+
+    Atom<string> CRTHitMatchLabel {
+      Name("CRTHitMatchLabel"),
+      Comment("Base label of track to CRT hit matching producer."),
+      "pandoraTrackCRTHit"
+    };
+
+    Atom<string> CRTHitMatchInfoLabel {
+      Name("CRTHitMatchInfoLabel"),
+      Comment("Base label of additional information on track to CRT hit matching producer."),
+      "CRTT0Tagging"
+    };
+
+    Atom<string> CRTTrackMatchLabel {
+      Name("CRTTrackMatchLabel"),
+      Comment("Base label of track to CRT track matching producer."),
+      "pandoraTrackCRTTrack"
+    };
+
+    Atom<string> CRTSpacePointMatchLabel {
+      Name("CRTSpacePointMatchLabel"),
+      Comment("Base label of track to CRT spacepoint matching producer."),
+      "crtspacepointmatching"
+    };
+
+    Atom<string> SBNDCRTTrackMatchLabel {
+      Name("SBNDCRTTrackMatchLabel"),
+      Comment("Base label of track to SBND CRT track matching producer."),
+      "crttrackmatching"
+    };
+
+    Atom<string> TrackMCSLabel {
+      Name("TrackMCSLabel"),
+      Comment("Base label of track MCS momentum calculation producer."),
+      "pandoraTrackMCS"
+    };
+
+    Atom<string> TrackRangeLabel {
+      Name("TrackRangeLabel"),
+      Comment("Base label of track range momentum calculation producer."),
+      "pandoraTrackRange"
+    };
+
+    Atom<string> CRTHitLabel {
+      Name("CRTHitLabel"),
+      Comment("Label of sbn CRT hits."),
+      "crthit" // icarus
+    };
+
+    Atom<string> CRTSimChanLabel {
+      Name("CRTSimChanLabel"),
+      Comment("Label of AuxDetSimChannels."),
+      "genericcrt" // icarus
+    };
+
+    Atom<string> CRTTrackLabel {
+      Name("CRTTrackLabel"),
+      Comment("Label of sbn CRT tracks."),
+      "crttrack" // icarus
+    };
+
+    Atom<string> CRTSpacePointLabel {
+      Name("CRTSpacePointLabel"),
+      Comment("Label of sbnd CRT spacepoints."),
+      "crtspacepoints" // sbnd
+    };
+
+    Atom<string> SBNDCRTTrackLabel {
+      Name("SBNDCRTTrackLabel"),
+      Comment("Label of sbnd CRT tracks."),
+      "crttracks" // sbnd
+    };
+
+    Atom<string> SBNDCRTVetoLabel {
+      Name("SBNDCRTVetoLabel"),
+      Comment("Label of sbnd CRT Veto."),
+      "crtveto" // sbnd
+    };
+
+    Atom<string> SBNDFrameShiftInfoLabel {
+      Name("SBNDFrameShiftInfoLabel"),
+      Comment("Label of sbnd frame shift."),
+      "" // sbnd
+    };
+
+    Atom<string> SBNDTimingInfoLabel {
+      Name("SBNDTimingInfoLabel"),
+      Comment("Label of sbnd timing shift."),
+      "" // sbnd
+    };
+
+    Atom<string> SBNDSoftwareTriggerLabel{
+      Name("SBNDSoftwareTriggerLabel"),
+      Comment("Label for software trigger producer"),
+      "" // sbnd
+    };
+
+    Atom<string> CRTPMTLabel {
+      Name("CRTPMTLabel"),
+      Comment("Label for the CRTPMT Matched variables from the crtpmt data product"),
+      "crtpmt" // this variable exists in icaruscode, pretty sure it does not yet exist in sbnd
+    };
+
+    Atom<string> TPCPMTBarycenterMatchLabel {
+      Name("TPCPMTBarycenterMatchLabel"),
+      Comment("Label of Slice-OpFlash matching via barycenters."),
+      "" //Empty by default, configured in icaruscode cafmaker_defs
+    };
+
+    Atom<string> CorrectedOpFlashLabel {
+      Name("CorrectedOpFlashLabel"),
+      Comment("Label of CorrectedOpFlash containing tpc-corrected flash time."),
+      ""
+    };
+
+    Atom<art::InputTag> NuGraphSliceHitLabel {
+      Name("NuGraphSliceHitLabel"),
+      Comment("Label of NuGraph slice hit map."),
+      "" //Empty by default, please set to e.g. art::InputTag("nuslhits")
+    };
+
+    Atom<art::InputTag> NuGraphSlicesLabel {
+      Name("NuGraphSlicesLabel"),
+      Comment("Label of slices that have NuGraph inference."),
+      "" //Empty by default, please set to e.g. art::InputTag("NCCSlices")
+    };
+
+    Atom<art::InputTag> NuGraphFilterLabel {
+      Name("NuGraphFilterLabel"),
+      Comment("Label of NuGraph filter."),
+      "" //Empty by default, please set to e.g. art::InputTag("NuGraph","filter")
+    };
+
+    Atom<art::InputTag> NuGraphSemanticLabel {
+      Name("NuGraphSemanticLabel"),
+      Comment("Label of NuGraph semantic."),
+      "" //Empty by default, please set to e.g. art::InputTag("NuGraph","semantic")
+    };
+
+    Atom<bool> UsePandoraAfterNuGraph {
+      Name("UsePandoraAfterNuGraph"),
+      Comment("Whether to use the second pass Pandora outputs for NuGraph reco."),
+      false
+    };
+    
+    Atom<float> NuGraphFilterCut {
+      Name("NuGraphFilterCut"),
+      Comment("Cut on the NuGraph2 filter score to define hit as signal or noise."),
+      0.5
+    };
+
+    Atom<float> NuGraphHIPTagWireDist {
+      Name("NuGraphHIPTagWireDist"),
+      Comment("TPC wire distance from the vertex used to count NuGraph2–tagged HIP hits."),
+      10
+    };
+
+    Atom<float> NuGraphHIPTagTickDist {
+      Name("NuGraphHIPTagTickDist"),
+      Comment("TPC tick distance from the vertex used to count NuGraph-2–tagged HIP hits."),
+      50
+    };
+
+    Atom<string> OpFlashLabel {
+      Name("OpFlashLabel"),
+      Comment("Label of PMT flash."),
+      "OpFlash"
+    };
+
+    Atom<string> PMTBeamSignalLabel {
+      Name("PMTBeamSignalLabel"),
+      Comment("Label for special PMT beam timing signals used to build the beam bunch structure"),
+      "beamTiming:RWM"
+    };
+
+    Atom<long long> CRTSimT0Offset {
+      Name("CRTSimT0Offset"),
+      Comment("start of beam gate/simulation time in the simulated CRT clock"),
+      0,
+    };
+
+    Atom<art::InputTag> TriggerLabel {
+      Name("TriggerLabel"),
+      Comment("Label of trigger."),
+      "daqTrigger"
+    };
+
+    Atom<art::InputTag> UnshiftedTriggerLabel {
+      Name("UnshiftedTriggerLabel"),
+      Comment("Label of trigger emulation before applying trigger time shifts."),
+      "emuTriggerUnshifted"
+    };
+
+    Atom<art::InputTag> MonPulsesTriggerLabel {
+      Name("MonPulsesTriggerLabel"),
+      Comment("Label of trigger emulation product MonPulses (number of PMT pairs above threshold for all channels) for all flashes."),
+      art::InputTag("opdaq", "MonPulses", "DetSim")
+    };
+
+    Atom<art::InputTag> MonPulseSizesTriggerLabel {
+      Name("MonPulseSizesTriggerLabel"),
+      Comment("Label of trigger emulation product MonPulses Sizes, which gives the length of each trigger response in MonPulses."),
+      art::InputTag("opdaq", "MonPulseSizes", "DetSim")
+    };
+
+    Atom<art::InputTag> PairsTriggerLabel {
+      Name("PairsTriggerLabel"),
+      Comment("Label of number of PMT pairs over threshold."),
+      art::InputTag("opdaq", "pairsOverThreshold", "DetSim")
+    };
+
+    Atom<art::InputTag> EmulatedTriggerLabel {
+      Name("EmulatedTriggerLabel"),
+      Comment("Label of bool of passing the trigger."),
+      art::InputTag("opdaq", "triggerEmulation", "DetSim")
+    };
+
+    Atom<string> FlashTrigLabel {
+      Name("FlashTrigLabel"),
+      Comment("Label of bool of passing flash trigger."),
+      "flashtrigfilter"
+    };
+
+    Atom<bool> CRTUseTS0 {
+      Name("CRTUseTS0"),
+      Comment("Whether to use ts0 or ts1 to fill the time of the SRCRTHit and SRCRTTrack"),
+      false
+    };
+
+    Atom<string> SimChannelLabel {
+      Name("SimChannelLabel"),
+      Comment("Label of input sim::SimChannel objects."),
+      "simdrift"
+    };
+
+    Atom<art::InputTag> SimEnergyDepositLabel {
+      Name("SimEnergyDepositLabel"),
+      Comment("Label of input sim::SimEnergyDeposit objects."),
+      art::InputTag("ionandscint", "priorSCE","G4")
+    };
+
+    Atom<bool> FillTrueParticles {
+      Name("FillTrueParticles"),
+      Comment("Whether to fill the rec.true_particles branch. The information on true particles"
+              " will still be stored for the neutirno primaries and for trk/shw truth matching."),
+      true
+    };
+
+    Atom<bool> FillTrackCaloTruth {
+      Name("FillTrackCaloTruth"),
+      Comment("Whether to save truth information associated with CaloPoints"),
+      true
+    };
+
+    Sequence<std::string> SystWeightLabels {
+      Name("SystWeightLabels"),
+      Comment("Labels for EventWeightMap objects for mc.nu.wgt")
+    };
+
+    Atom<bool> FillHitsAllSlices {
+      Name("FillHitsAllSlices"),
+      Comment("Fill per-hit information in all reconstructed slices."),
+      false
+    };
+
+    Atom<bool> FillHitsNeutrinoSlices {
+      Name("FillHitsNeutrinoSlices"),
+      Comment("Fill per-hit information in neutrino ID-d reconstructed slices."),
+      true
+    };
+
+    Atom<float> TrackHitFillRRStartCut {
+      Name("TrackHitFillRRStartCut"),
+      Comment("How long from the start of a track to save calo-point information. Set to -1 to save nothing"),
+      5.
+    };
+
+    Atom<float> TrackHitFillRREndCut {
+      Name("TrackHitFillRREndCut"),
+      Comment("How long from the end of a track to save calo-point information. Set to -1 to save nothing"),
+      25.
+    };
+
+    struct PFOCharLabels_t {
+      Atom<string> EndFractionName {
+        Name("EndFractionName"),
+        Comment("Provide the tool name for the EndFraction BDT variable."),
+        "LArThreeDChargeFeatureTool_EndFraction"
+      };
+
+      Atom<string> FractionalSpreadName {
+        Name("FractionalSpreadName"),
+        Comment("Provide the tool name for the FractionalSpread BDT variable."),
+        "LArThreeDChargeFeatureTool_FractionalSpread"
+      };
+
+      Atom<string> DiffStraightLineMeanName {
+        Name("DiffStraightLineMeanName"),
+        Comment("Provide the tool name for the DiffStraightLineMean BDT variable."),
+        "LArThreeDLinearFitFeatureTool_DiffStraightLineMean"
+      };
+
+      Atom<string> LengthName {
+        Name("LengthName"),
+        Comment("Provide the tool name for the Length BDT variable."),
+        "LArThreeDLinearFitFeatureTool_Length"
+      };
+
+      Atom<string> MaxFitGapLengthName {
+        Name("MaxFitGapLengthName"),
+        Comment("Provide the tool name for the MaxFitGapLength BDT variable."),
+        "LArThreeDLinearFitFeatureTool_MaxFitGapLength"
+      };
+
+      Atom<string> SlidingLinearFitRMSName {
+        Name("SlidingLinearFitRMSName"),
+        Comment("Provide the tool name for the SlidingLinearFitRMS BDT variable."),
+        "LArThreeDLinearFitFeatureTool_SlidingLinearFitRMS"
+      };
+
+      Atom<string> AngleDiffName {
+        Name("AngleDiffName"),
+        Comment("Provide the tool name for the AngleDiff BDT variable."),
+        "LArThreeDOpeningAngleFeatureTool_AngleDiff"
+      };
+
+      Atom<string> SecondaryPCARatioName {
+        Name("SecondaryPCARatioName"),
+        Comment("Provide the tool name for the SecondaryPCARatio BDT variable."),
+        "LArThreeDPCAFeatureTool_SecondaryPCARatio"
+      };
+
+      Atom<string> TertiaryPCARatioName {
+        Name("TertiaryPCARatioName"),
+        Comment("Provide the tool name for the TertiaryPCARatio BDT variable."),
+        "LArThreeDPCAFeatureTool_TertiaryPCARatio"
+      };
+
+      Atom<string> VertexDistanceName {
+        Name("VertexDistanceName"),
+        Comment("Provide the tool name for the VertexDistance BDT variable."),
+        "LArThreeDVertexDistanceFeatureTool_VertexDistance"
+      };
+
+      Atom<string> HaloTotalRatioName {
+        Name("HaloTotalRatioName"),
+        Comment("Provide the tool name for the HaloTotalRatio BDT variable."),
+        "LArConeChargeFeatureTool_HaloTotalRatio"
+      };
+
+      Atom<string> ConcentrationName {
+        Name("ConcentrationName"),
+        Comment("Provide the tool name for the Concentration BDT variable."),
+        "LArConeChargeFeatureTool_Concentration"
+
+      };
+
+      Atom<string> ConicalnessName {
+        Name("ConicalnessName"),
+        Comment("Provide the tool name for the Conicalness BDT variable."),
+        "LArConeChargeFeatureTool_Conicalness"
+      };
+    };
+
+    OptionalTable<PFOCharLabels_t> PFOCharLabels {
+      Name("PFOCharLabels"),
+      Comment("Provide tool names for the Pandora track/shower discrimination BDT variables.")
+    };
+
+    Atom<bool> ReferencePMTFromTriggerToBeam {
+      Name("ReferencePMTFromTriggerToBeam"),
+      Comment("Whether to switch the reference time of PMT reco from 'trigger' to 'beam spill' time."),
+      true
+    };
+
+    Atom<bool> ReferenceCRTT0ToBeam {
+      Name("ReferenceCRTT0ToBeam"),
+      Comment("Whether to switch the reference time of CRT T0 reco to the 'beam spill' time."),
+      true
+    };
+
+    Atom<bool> ReferenceCRTT1FromTriggerToBeam {
+      Name("ReferenceCRTT1FromTriggerToBeam"),
+      Comment("Whether to switch the reference time of CRT T1 reco from 'trigger' to the 'beam spill' time."),
+      true
+    };
+
+    Atom<string> CVNLabel {
+      Name("CVNLabel"),
+      Comment("Label of CVN scores."),
+      "cvn" 
+    };
+
+    Atom<string> LightCaloLabel {
+      Name("LightCaloLabel"),
+      Comment("Label of light calorimetry producer"),
+      "lightcalo"
+    };
+    
+    Atom<std::string> fBlipTag { 
+      Name("BlipTag"),
+      Comment("Provide a string to label the blip input"), 
+      "blipreco"
+    };
+  };
+}
+
+#endif

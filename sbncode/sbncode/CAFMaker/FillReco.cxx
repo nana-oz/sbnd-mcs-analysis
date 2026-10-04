@@ -1,0 +1,1629 @@
+//////////////////////////////////////////////////////////////////////
+// \file    FillReco.cxx
+// \brief   Fill reco SR branches
+// \author  $Author: psihas@fnal.gov
+//////////////////////////////////////////////////////////////////////
+
+#include "larcorealg/Geometry/GeometryCore.h"
+#include "larcorealg/Geometry/WireReadoutGeom.h"
+
+#include "FillReco.h"
+#include "RecoUtils/RecoUtils.h"
+
+namespace caf
+{
+  //......................................................................
+  bool SelectSlice(const caf::SRSlice &slice, bool cut_clear_cosmic) {
+    return (!slice.is_clear_cosmic || !cut_clear_cosmic) // No clear cosmics
+           && slice.primary.size() > 0; // must have primary tracks/showers
+  }
+
+  void FillStubVars(const sbn::Stub &stub,
+                    const art::Ptr<recob::PFParticle> stubpfp,
+                    caf::SRStub &srstub,
+                    bool allowEmpty) {
+
+    // allowEmpty does not (yet) matter here
+    (void) allowEmpty;
+
+    // Copy the stub object over
+    srstub.vtx.x = stub.vtx.x();
+    srstub.vtx.y = stub.vtx.y();
+    srstub.vtx.z = stub.vtx.z();
+
+    srstub.end.x = stub.end.x();
+    srstub.end.y = stub.end.y();
+    srstub.end.z = stub.end.z();
+
+    srstub.efield_vtx = stub.efield_vtx;
+    srstub.efield_end = stub.efield_end;
+
+    for (unsigned ip = 0; ip < stub.plane.size(); ip++) {
+      caf::SRStubPlane plane;
+      plane.p = (caf::Plane_t)stub.plane[ip].Plane;
+      plane.pitch = stub.pitch[ip];
+      plane.trkpitch = stub.trkpitch[ip];
+      plane.vtx_w = stub.vtx_w[ip];
+      plane.hit_w = stub.hit_w[ip];
+      for (unsigned ih = 0; ih < stub.hits[ip].size(); ih++) {
+        caf::SRStubHit hit;
+        hit.charge = stub.hits[ip][ih].charge;
+        hit.wire = stub.hits[ip][ih].wire;
+        hit.ontrack = stub.hits[ip][ih].ontrack;
+
+        plane.hits.push_back(hit);
+      }
+
+      srstub.planes.push_back(plane);     
+    }
+
+    // If there is an overlaid PFParticle, save its ID
+    if (stubpfp) srstub.pfpid = stubpfp->Self();
+
+  }
+
+  void FillCRTHit(const sbn::crt::CRTHit &hit,
+                  bool use_ts0,
+                  int64_t CRT_T0_reference_time, // ns, signed
+                  double CRT_T1_reference_time, // us
+                  const std::map<std::pair<int, int>, sim::AuxDetSimChannel> &crtsimchanmap,
+                  caf::SRCRTHit &srhit,
+                  bool allowEmpty) {
+
+    srhit.t0 = ( (long long)(hit.ts0()) /*u_int64_t to int64_t*/ + CRT_T0_reference_time )/1000.;
+    srhit.t1 = hit.ts1()/1000.+CRT_T1_reference_time; // ns -> us
+    srhit.time = use_ts0 ? srhit.t0 : srhit.t1;
+
+    srhit.position.x = hit.x_pos;
+    srhit.position.y = hit.y_pos;
+    srhit.position.z = hit.z_pos;
+
+    srhit.position_err.x = hit.x_err;
+    srhit.position_err.y = hit.y_err;
+    srhit.position_err.z = hit.z_err;
+
+    srhit.pe = hit.peshit;
+    srhit.plane = hit.plane;
+
+    // lookup truth matching information
+    std::map<int, float> true_energy;
+    std::set<std::pair<int, int>> checked; // keep track of what AuxDetSimChannels we have looked at
+    for (auto const &mac_to_pes: hit.pesmap) {
+      int mac = (int)mac_to_pes.first;
+      for (const std::pair<int,float> &chan_pe: mac_to_pes.second) {
+        int chan = chan_pe.first;
+
+        // check for the 3-pos Minos ("m") modules, or the 1-pos other modules
+        bool is_minos_module = mac < 94;
+        int pos = is_minos_module ? (chan/10 + 1) : 1;
+
+        std::pair<int, int> key {mac, pos};
+        if (checked.count(key)) continue; // already looked here
+
+        checked.insert(key);
+   
+        if (crtsimchanmap.count(key)) {
+          const sim::AuxDetSimChannel &crtsimchan = crtsimchanmap.at(key);
+          for (const sim::AuxDetIDE &ide: crtsimchan.AuxDetIDEs()) {
+            double hit_time_us = srhit.time;
+            double tru_time_us = ide.entryT/1e3; // ns -> us 
+
+            // 1us cut on truth matching
+            if (abs(hit_time_us - tru_time_us) < 1) {
+            // std::cout << "Hit at time: " << (srhit.time/1e3) << " " << (srhit.t0/1e3) << " " << (srhit.t1/1e3) << " pes: " << chan_pe.second << " of " << srhit.pe << " on FEB: " << mac << " channel: " << chan << " matched to AuxDetID: " << crtsimchan.AuxDetID() << " G4ID: " << ide.trackID << " E: " << ide.energyDeposited << " T: " << (ide.entryT/1e6) << std::endl;
+              true_energy[ide.trackID] += ide.energyDeposited;
+            }
+
+          }
+        }
+      }
+    }
+
+    // sort results by energy
+    std::vector<std::pair<float, int>> true_energy_list;
+    for (auto const &pair: true_energy) true_energy_list.push_back(std::make_pair(pair.second, pair.first));
+    std::sort(true_energy_list.begin(), true_energy_list.end(), std::greater<>());
+
+    // Save to the SRCRTHit truth
+    for (auto const &pair: true_energy_list) {
+      srhit.truth.match_e.push_back(pair.first);
+      srhit.truth.match_id.push_back(pair.second);
+    }
+    if (true_energy_list.size() > 0) srhit.truth.bestmatch_id = true_energy_list[0].second;
+
+  }
+
+  void FillCRTTrack(const sbn::crt::CRTTrack &track,
+                  bool use_ts0,
+                  caf::SRCRTTrack &srtrack,
+                  bool allowEmpty) {
+
+    srtrack.time = (use_ts0 ? (float)track.ts0_ns : track.ts1_ns) / 1000.;
+
+    srtrack.hita.position.x = track.x1_pos;
+    srtrack.hita.position.y = track.y1_pos;
+    srtrack.hita.position.z = track.z1_pos;
+
+    srtrack.hita.position_err.x = track.x1_err;
+    srtrack.hita.position_err.y = track.y1_err;
+    srtrack.hita.position_err.z = track.z1_err;
+
+    srtrack.hita.plane = track.plane1;
+
+    srtrack.hitb.position.x = track.x2_pos;
+    srtrack.hitb.position.y = track.y2_pos;
+    srtrack.hitb.position.z = track.z2_pos;
+
+    srtrack.hitb.position_err.x = track.x2_err;
+    srtrack.hitb.position_err.y = track.y2_err;
+    srtrack.hitb.position_err.z = track.z2_err;
+
+    srtrack.hitb.plane = track.plane2;
+  }
+
+  void FillCRTSpacePoint(const sbnd::crt::CRTSpacePoint &spacepoint,
+                         const sbnd::crt::CRTCluster &cluster,
+                         caf::SRCRTSpacePoint &srspacepoint,
+                         bool allowEmpty)
+  {
+    srspacepoint.position     = SRVector3D(spacepoint.X(), spacepoint.Y(), spacepoint.Z());
+    srspacepoint.position_err = SRVector3D(spacepoint.XErr(), spacepoint.YErr(), spacepoint.ZErr());
+    srspacepoint.pe           = spacepoint.PE();
+    srspacepoint.time         = spacepoint.Ts0();
+    srspacepoint.time_err     = spacepoint.Ts0Err();
+    srspacepoint.complete     = spacepoint.Complete();
+    srspacepoint.nhits        = cluster.NHits();
+    srspacepoint.tagger       = cluster.Tagger();
+  }
+
+  void FillSBNDCRTTrack(const sbnd::crt::CRTTrack &track,
+                        caf::SRSBNDCRTTrack &srsbndcrttrack,
+                        bool allowEmpty)
+  {
+    for(auto const& point : track.Points())
+      srsbndcrttrack.points.emplace_back(point.X(), point.Y(), point.Z());
+
+    srsbndcrttrack.time     = track.Ts0();
+    srsbndcrttrack.time_err = track.Ts0Err();
+    srsbndcrttrack.pe       = track.PE();
+    srsbndcrttrack.tof      = track.ToF();
+
+    for(auto const& tagger : track.Taggers())
+      srsbndcrttrack.taggers.push_back(tagger);
+  }
+
+  void FillSBNDCRTVeto(const sbnd::crt::CRTVeto &veto,
+		       const std::vector<art::Ptr<sbnd::crt::CRTSpacePoint>> &points,
+                       caf::SRSBNDCRTVeto &srsbndcrtveto,
+                       bool allowEmpty)
+  {
+    srsbndcrtveto.V0     = veto.V0();
+    srsbndcrtveto.V1     = veto.V1();
+    srsbndcrtveto.V2     = veto.V2();
+    srsbndcrtveto.V3     = veto.V3();
+    srsbndcrtveto.V4     = veto.V4();
+
+    // add the CRTSpacePoint associations to the SR Veto
+    for(auto const& sp : points) {
+      srsbndcrtveto.sp_position.emplace_back(sp->X(), sp->Y(), sp->Z());   
+      srsbndcrtveto.sp_time.push_back(sp->Ts0()); // ns for SBND CRT SpacePoints   
+      srsbndcrtveto.sp_pe.push_back(sp->PE());   
+    }
+  }
+
+  void FillSBNDFrameShiftInfo(const sbnd::timing::FrameShiftInfo &frame,
+                        caf::SRSBNDFrameShiftInfo &srsbndframe,
+                        bool allowEmpty)
+  {
+    srsbndframe.frameCrtt1         = frame.FrameCrtt1();
+    srsbndframe.timingTypeCrtt1    = frame.TimingTypeCrtt1();
+    srsbndframe.timingChannelCrtt1 = frame.TimingChannelCrtt1();
+
+    srsbndframe.frameBeamGate         = frame.FrameBeamGate();
+    srsbndframe.timingTypeBeamGate    = frame.TimingTypeBeamGate();
+    srsbndframe.timingChannelBeamGate = frame.TimingChannelBeamGate();
+
+    srsbndframe.frameEtrig         = frame.FrameEtrig();
+    srsbndframe.timingTypeEtrig    = frame.TimingTypeEtrig();
+    srsbndframe.timingChannelEtrig = frame.TimingChannelEtrig();
+
+    srsbndframe.frameDefault         = frame.FrameDefault();
+    srsbndframe.timingTypeDefault    = frame.TimingTypeDefault();
+    srsbndframe.timingChannelDefault = frame.TimingChannelDefault();
+
+  }
+
+  void FillSBNDTimingInfo(const sbnd::timing::TimingInfo &timing,
+                        caf::SRSBNDTimingInfo &srsbndtiming,
+                        bool allowEmpty)
+  {
+    srsbndtiming.rawDAQHeaderTimestamp = timing.RawDAQHeaderTimestamp();
+    srsbndtiming.tdcCrtt1 = timing.TdcCrtt1();
+    srsbndtiming.tdcBes = timing.TdcBes();
+    srsbndtiming.tdcRwm = timing.TdcRwm();
+    srsbndtiming.tdcEtrig = timing.TdcEtrig();
+    srsbndtiming.hltCrtt1 = timing.HltCrtt1();
+    srsbndtiming.hltEtrig = timing.HltEtrig();
+    srsbndtiming.hltBeamGate = timing.HltBeamGate();
+  }
+
+  void FillCRTPMTMatch(const sbn::crt::CRTPMTMatching &match,
+		       caf::SRCRTPMTMatch &srmatch,
+		       bool allowEmpty){
+    // allowEmpty does not (yet) matter here                                                           
+    (void) allowEmpty;
+    //srmatch.setDefault();
+    srmatch.flashID = match.flashID;
+    srmatch.flashTime_us = match.flashTime;
+    srmatch.flashGateTime = match.flashGateTime;
+    srmatch.firstOpHitPeakTime = match.firstOpHitPeakTime;
+    srmatch.firstOpHitStartTime = match.firstOpHitStartTime;
+    srmatch.flashInGate = match.flashInGate;
+    srmatch.flashInBeam = match.flashInBeam;
+    srmatch.flashPE = match.flashPE;
+    srmatch.flashPosition = SRVector3D (match.flashPosition.X(), match.flashPosition.Y(), match.flashPosition.Z());
+    srmatch.flashYWidth = match.flashYWidth;
+    srmatch.flashZWidth = match.flashZWidth;
+    unsigned int topen = 0, topex = 0, sideen = 0, sideex = 0;
+    for(const auto& matchedCRTHit : match.matchedCRTHits){
+      caf::SRMatchedCRT matchedCRT;
+      matchedCRT.PMTTimeDiff = matchedCRTHit.PMTTimeDiff; 
+      matchedCRT.time = matchedCRTHit.time;
+      matchedCRT.sys = matchedCRTHit.sys;
+      matchedCRT.region = matchedCRTHit.region;
+      matchedCRT.position = SRVector3D(matchedCRTHit.position.X(), matchedCRTHit.position.Y(), matchedCRTHit.position.Z());
+      if(matchedCRTHit.PMTTimeDiff < 0){
+        if(matchedCRTHit.sys == 0) topen++;
+        else if(matchedCRTHit.sys == 1) sideen++;
+      }
+      else if(matchedCRTHit.PMTTimeDiff >= 0){
+        if(matchedCRTHit.sys == 0) topex++;
+        else if(matchedCRTHit.sys == 1) sideex++;
+      }
+      srmatch.matchedCRTHits.push_back(matchedCRT);
+    }
+    srmatch.flashClassification = static_cast<int>(sbn::crt::assignFlashClassification(topen, topex, sideen, sideex, 0, 0));
+  }
+
+
+  void FillICARUSOpFlash(const recob::OpFlash &flash,
+                  std::vector<recob::OpHit const*> const& hits,
+                  int cryo, 
+                  std::vector<sbn::timing::PMTBeamSignal> RWMTimes,
+                  caf::SROpFlash &srflash,
+                  bool allowEmpty) {
+
+    srflash.setDefault();
+
+    srflash.time = flash.Time();
+    srflash.timewidth = flash.TimeWidth();
+
+    double firstTime = std::numeric_limits<double>::max();
+    std::map<int, double> risemap;
+    for(const auto& hit: hits){
+      double const hitTime = hit->HasStartTime()? hit->StartTime(): hit->PeakTime();
+      if (firstTime > hitTime)
+        firstTime = hitTime;
+      if (!RWMTimes.empty())
+        sbn::timing::SelectFirstOpHitByTime(hit,risemap); 
+    }
+    srflash.rwmtime = getFlashBunchTime(risemap, RWMTimes);
+    srflash.firsttime = firstTime;
+
+    srflash.cryo = cryo; // 0 in SBND, 0/1 for E/W in ICARUS
+
+    // Sum over each wall, not very SBND-compliant
+    float sumEast = 0.;
+    float sumWest = 0.;
+    int countingOffset = 0;
+    if ( cryo == 1 ) countingOffset += 180;
+    for ( int PMT = 0 ; PMT < 180 ; PMT++ ) {
+      if ( PMT <= 89 ) sumEast += flash.PEs().at(PMT + countingOffset);
+      else sumWest += flash.PEs().at(PMT + countingOffset);
+    }
+    srflash.peperwall[0] = sumEast;
+    srflash.peperwall[1] = sumWest;
+
+    srflash.totalpe = flash.TotalPE();
+    srflash.fasttototal = flash.FastToTotal();
+    srflash.onbeamtime = flash.OnBeamTime();
+
+    srflash.center.SetXYZ( -9999.f, flash.YCenter(), flash.ZCenter() );
+    srflash.width.SetXYZ( -9999.f, flash.YWidth(), flash.ZWidth() );
+
+    // Checks if ( recob::OpFlash.XCenter() != std::numeric_limits<double>::max() )
+    // See LArSoft OpFlash.h at https://nusoft.fnal.gov/larsoft/doxsvn/html/OpFlash_8h_source.html
+    if ( flash.hasXCenter() ) {
+      srflash.center.SetX( flash.XCenter() );
+      srflash.width.SetX( flash.XWidth() );
+    }
+  }
+
+  void FillSBNDOpFlash(const recob::OpFlash &flash,
+    std::vector<recob::OpHit const*> const& hits,
+    int tpc, 
+    caf::SROpFlash &srflash,
+    bool allowEmpty) {
+
+    srflash.setDefault();
+
+    srflash.time = flash.Time();
+    srflash.timewidth = flash.TimeWidth();
+
+    double firstTime = std::numeric_limits<double>::max();
+    for(const auto& hit: hits){
+    double const hitTime = hit->HasStartTime()? hit->StartTime(): hit->PeakTime();
+    if (firstTime > hitTime)
+    firstTime = hitTime;
+    }
+    srflash.firsttime = firstTime;
+    srflash.tpc = tpc;
+
+    srflash.totalpe = flash.TotalPE();
+    srflash.fasttototal = flash.FastToTotal();
+    srflash.onbeamtime = flash.OnBeamTime();
+
+    srflash.center.SetXYZ( -9999.f, flash.YCenter(), flash.ZCenter() );
+    srflash.width.SetXYZ( -9999.f, flash.YWidth(), flash.ZWidth() );
+
+    // Checks if ( recob::OpFlash.XCenter() != std::numeric_limits<double>::max() )
+    // See LArSoft OpFlash.h at https://nusoft.fnal.gov/larsoft/doxsvn/html/OpFlash_8h_source.html
+    if ( flash.hasXCenter() ) {
+    srflash.center.SetX( flash.XCenter() );
+    srflash.width.SetX( flash.XWidth() );
+    }
+  }
+
+
+  void FillCorrectedOpFlashTiming(const std::vector<art::Ptr<sbn::CorrectedOpFlashTiming>> &slcCorrectedOpFlash,
+                           caf::SRSlice& slice)
+  { 
+    slice.correctedOpFlash.setDefault();
+    if ( slcCorrectedOpFlash.empty()==false ) {
+      const sbn::CorrectedOpFlashTiming &_correctedOpFlash = *slcCorrectedOpFlash[0];
+      slice.correctedOpFlash.OpFlashT0  = _correctedOpFlash.OpFlashT0;
+      slice.correctedOpFlash.NuToFLight  = _correctedOpFlash.NuToFLight;
+      slice.correctedOpFlash.NuToFCharge  = _correctedOpFlash.NuToFCharge;
+      slice.correctedOpFlash.OpFlashT0Corrected  = _correctedOpFlash.OpFlashT0Corrected;
+    }
+  }
+
+
+  std::vector<float> double_to_float_vector(const std::vector<double>& v)
+  {
+    std::vector<float> ret;
+    ret.reserve(v.size());
+    for(double x: v) ret.push_back(x);
+    return ret;
+  }
+
+  //......................................................................
+  void FillShowerVars(const recob::Shower& shower,
+                      const recob::Vertex* vertex,
+                      const std::vector<art::Ptr<recob::Hit>> &hits,
+                      const geo::WireReadoutGeom& wireReadout,
+                      unsigned producer,
+                      caf::SRShower &srshower,
+                      Det_t det,
+                      bool allowEmpty)
+  {
+
+    srshower.producer = producer;
+
+    // We need to convert the energy from MeV to GeV
+    // Also convert -999 -> -5 for consistency with other defaults in the CAFs
+    for(int i = 0; i < 3; ++i){
+      const float e = shower.Energy()[i];
+      srshower.plane[i].energy = e > 0 ? e / 1000.f : -5.f;
+      srshower.plane[i].dEdx = shower.dEdx()[i];
+    }
+
+    srshower.dir    = SRVector3D( shower.Direction() );
+    srshower.start  = SRVector3D( shower.ShowerStart() );
+
+    // TO DO: work out conversion gap
+    // It's sth like this but not quite. And will need to pass a simb::MCtruth object vtx position anyway.
+    // srshower.conversion_gap = (shower.ShowerStart() - vertex.Position()).Mag();
+
+    for(int p = 0; p < 3; ++p) srshower.plane[p].nHits = 0;
+    for (auto const& hit:hits) ++srshower.plane[hit->WireID().Plane].nHits;
+
+    if(det == kSBND)
+      {
+        int bestplane_for_energy = -999;
+        int mosthits = -1;
+        for(int p = 0; p < 3; ++p)
+          {
+            if((int)srshower.plane[p].nHits > mosthits)
+              {
+                mosthits = srshower.plane[p].nHits;
+                bestplane_for_energy = p;
+              }
+          }
+
+        if(bestplane_for_energy != -999)
+          {
+            srshower.bestplane_for_energy = bestplane_for_energy;
+            srshower.bestplane_energy     = srshower.plane[bestplane_for_energy].energy;
+          }
+
+        if(shower.best_plane() != -999 && srshower.plane[shower.best_plane()].dEdx != -999)
+          {
+            srshower.bestplane_for_dedx = shower.best_plane();
+            srshower.bestplane_dEdx     = srshower.plane[shower.best_plane()].dEdx;
+          }
+        else
+          {
+            for(int p = 2; p >= 0; --p)
+              {
+                if(srshower.plane[p].dEdx != -999)
+                  {
+                    srshower.bestplane_for_dedx = p;
+                    srshower.bestplane_dEdx     = srshower.plane[shower.best_plane()].dEdx;
+                    break;
+                  }
+              }
+          }
+      }
+    else
+      {
+        if(shower.best_plane() != -999)
+          {
+            srshower.bestplane_for_energy = shower.best_plane();
+            srshower.bestplane_for_dedx   = shower.best_plane();
+            srshower.bestplane_dEdx       = srshower.plane[shower.best_plane()].dEdx;
+            srshower.bestplane_energy     = srshower.plane[shower.best_plane()].energy;
+          }
+      }
+
+    if(shower.has_open_angle())
+      srshower.open_angle = shower.OpenAngle();
+    if(shower.has_length())
+      srshower.len = shower.Length();
+
+    // We want density to be in MeV/cm so need to convert the energy back to MeV from GeV
+    if(srshower.len > std::numeric_limits<float>::epsilon() && srshower.bestplane_energy > 0)
+        srshower.density = 1000.f * srshower.bestplane_energy / srshower.len;
+
+    if (vertex && shower.ShowerStart().Z()>-990) {
+      // Need to do some rearranging to make consistent types
+      const geo::Point_t vertexPos(vertex->position());
+      const TVector3 vertexTVec3{vertexPos.X(), vertexPos.Y(), vertexPos.Z()};
+
+      srshower.conversion_gap = (shower.ShowerStart() - vertexTVec3).Mag();
+    }
+
+    if (shower.Direction().Z()>-990 && shower.ShowerStart().Z()>-990 && shower.Length()>0) {
+      srshower.end = shower.ShowerStart()+ (shower.Length() * shower.Direction());
+    }
+
+    for (geo::PlaneGeo const& plane: wireReadout.Iterate<geo::PlaneGeo>()) {
+
+      const double angleToVert(wireReadout.WireAngleToVertical(plane.View(), plane.ID()) - 0.5*M_PI);
+      const double cosgamma(std::abs(std::sin(angleToVert)*shower.Direction().Y()+std::cos(angleToVert)*shower.Direction().Z()));
+
+      srshower.plane[plane.ID().Plane].wirePitch = plane.WirePitch()/cosgamma;
+    }
+  }
+
+  void FillShowerRazzle(const art::Ptr<sbn::MVAPID> razzle,
+      caf::SRShower& srshower,
+      bool allowEmpty)
+  {
+    srshower.razzle.electronScore = razzle->mvaScoreMap.at(11);
+    srshower.razzle.photonScore = razzle->mvaScoreMap.at(22);
+    srshower.razzle.otherScore = razzle->mvaScoreMap.at(0);
+
+    srshower.razzle.pdg = razzle->BestPDG();
+    srshower.razzle.bestScore = razzle->BestScore();
+  }
+
+
+  void FillShowerCosmicDist(const std::vector<art::Ptr<float> >& cosmicDistVec,
+                      caf::SRShower& srshower)
+  {
+      if (cosmicDistVec.size() != 1)
+        return;
+      srshower.cosmicDist = *cosmicDistVec.front();
+  }
+
+  void FillShowerResiduals(const std::vector<art::Ptr<float> >& residuals,
+                      caf::SRShower& srshower)
+  {
+    for (auto const& res: residuals) {
+      srshower.selVars.showerResiduals.push_back(*res);
+    }
+  }
+
+  void FillShowerTrackFit(const sbn::ShowerTrackFit& trackFit,
+                      caf::SRShower& srshower)
+  {
+    srshower.selVars.trackLength = trackFit.mTrackLength;
+    srshower.selVars.trackWidth  = trackFit.mTrackWidth;
+  }
+
+  void FillShowerDensityFit(const sbn::ShowerDensityFit& densityFit,
+                      caf::SRShower& srshower)
+  {
+    srshower.selVars.densityGradient      = densityFit.mDensityGrad;
+    srshower.selVars.densityGradientPower = densityFit.mDensityPow;
+  }
+
+  void FillSliceVars(const recob::Slice& slice,
+                     const recob::PFParticle *primary /* can be null */,
+                     unsigned producer,
+                     caf::SRSlice &srslice,
+                     bool allowEmpty)
+  {
+
+    srslice.producer = producer;
+    srslice.charge       = slice.Charge();
+
+    // get the primary tracks/showers
+    if (primary != NULL) {
+      for (unsigned id: primary->Daughters()) {
+        srslice.primary.push_back(id);
+      }
+      srslice.self = primary->Self();
+      srslice.nu_pdg = primary->PdgCode();
+    }
+    else {
+      srslice.self = -1;
+    }
+  }
+
+  void FillSliceMetadata(const larpandoraobj::PFParticleMetadata *primary_meta,
+                        caf::SRSlice &srslice,
+                        bool allowEmpty)
+  {
+    // default values
+    srslice.nu_score = -1;
+    srslice.is_clear_cosmic = true;
+    srslice.nuid.setDefault();
+
+    // collect the properties
+    if (primary_meta != NULL) {
+      auto const &properties = primary_meta->GetPropertiesMap();
+      if (properties.count("IsClearCosmic") || (properties.count("NuScore") && properties.at("NuScore") < 0)) {
+        assert(!properties.count("IsNeutrino"));
+        srslice.is_clear_cosmic = true;
+      }
+      else {
+        assert(properties.count("IsNeutrino"));
+        srslice.is_clear_cosmic = false;
+      }
+      if (properties.count("NuScore")) {
+        srslice.nu_score = properties.at("NuScore");
+      }
+      else {
+        srslice.nu_score = -1;
+      }
+      // NeutrinoID (SliceID) features
+      CopyPropertyIfSet(properties, "NuNFinalStatePfos",        srslice.nuid.nufspfos);
+      CopyPropertyIfSet(properties, "NuNHitsTotal",             srslice.nuid.nutothits);
+      CopyPropertyIfSet(properties, "NuVertexY",                srslice.nuid.nuvtxy);
+      CopyPropertyIfSet(properties, "NuWeightedDirZ",           srslice.nuid.nuwgtdirz);
+      CopyPropertyIfSet(properties, "NuNSpacePointsInSphere",   srslice.nuid.nusps);
+      CopyPropertyIfSet(properties, "NuEigenRatioInSphere",     srslice.nuid.nueigen);
+      CopyPropertyIfSet(properties, "CRLongestTrackDirY",       srslice.nuid.crlongtrkdiry);
+      CopyPropertyIfSet(properties, "CRLongestTrackDeflection", srslice.nuid.crlongtrkdef);
+      CopyPropertyIfSet(properties, "CRFracHitsInLongestTrack", srslice.nuid.crlongtrkhitfrac);
+      CopyPropertyIfSet(properties, "CRNHitsMax",               srslice.nuid.crmaxhits);
+    }
+
+  }
+
+
+  void FillSliceVertex(const recob::Vertex *vertex,
+                       caf::SRSlice& slice,
+                       bool allowEmpty) {
+    if (vertex != NULL) {
+      slice.vertex.x = vertex->position().X();
+      slice.vertex.y = vertex->position().Y();
+      slice.vertex.z = vertex->position().Z();
+    }
+  }
+
+
+  void FillSliceCRUMBS(const sbn::CRUMBSResult *crumbs,
+                       caf::SRSlice& slice,
+                       bool allowEmpty) {
+    if (crumbs != nullptr) {
+      slice.crumbs_result.score = crumbs->score;
+      slice.crumbs_result.ccnumuscore = crumbs->ccnumuscore;
+      slice.crumbs_result.ccnuescore = crumbs->ccnuescore;
+      slice.crumbs_result.ncscore = crumbs->ncscore;
+      slice.crumbs_result.bestscore = crumbs->bestscore;
+      slice.crumbs_result.bestid = crumbs->bestid;
+      slice.crumbs_result.tpc.crlongtrackhitfrac = crumbs->tpc_CRFracHitsInLongestTrack;
+      slice.crumbs_result.tpc.crlongtrackdefl = crumbs->tpc_CRLongestTrackDeflection;
+      slice.crumbs_result.tpc.crlongtrackdiry = crumbs->tpc_CRLongestTrackDirY;
+      slice.crumbs_result.tpc.crnhitsmax = crumbs->tpc_CRNHitsMax;
+      slice.crumbs_result.tpc.nusphereeigenratio = crumbs->tpc_NuEigenRatioInSphere;
+      slice.crumbs_result.tpc.nufinalstatepfos = crumbs->tpc_NuNFinalStatePfos;
+      slice.crumbs_result.tpc.nutotalhits = crumbs->tpc_NuNHitsTotal;
+      slice.crumbs_result.tpc.nuspherespacepoints = crumbs->tpc_NuNSpacePointsInSphere;
+      slice.crumbs_result.tpc.nuvertexy = crumbs->tpc_NuVertexY;
+      slice.crumbs_result.tpc.nuwgtdirz = crumbs->tpc_NuWeightedDirZ;
+      slice.crumbs_result.tpc.stoppingchi2ratio = crumbs->tpc_StoppingChi2CosmicRatio;
+      slice.crumbs_result.pds.fmtotalscore = crumbs->pds_FMTotalScore;
+      slice.crumbs_result.pds.fmpe = crumbs->pds_FMPE;
+      slice.crumbs_result.pds.fmtime = crumbs->pds_FMTime;
+      slice.crumbs_result.pds.opt0score = crumbs->pds_OpT0Score;
+      slice.crumbs_result.pds.opt0measuredpe = crumbs->pds_OpT0MeasuredPE;
+      slice.crumbs_result.crt.trackscore = crumbs->crt_TrackScore;
+      slice.crumbs_result.crt.spscore = crumbs->crt_SPScore;
+      slice.crumbs_result.crt.tracktime = crumbs->crt_TrackTime;
+      slice.crumbs_result.crt.sptime = crumbs->crt_SPTime;
+    }
+  }
+
+  void FillSliceOpT0Finder(const std::vector<art::Ptr<sbn::OpT0Finder>> &opt0_v,
+                           caf::SRSlice &slice)
+  {
+    if (opt0_v.empty()==false){
+      unsigned int nopt0 = opt0_v.size();
+      double max_score=-1.; // score of the opt0 object with the highest score 
+      double sec_score=-1.; // score of the opt0 object with the 2nd highest score 
+
+      unsigned int max_idx = 0;
+      unsigned int sec_idx = 0;
+
+      // fill the default, which is the maximum 
+      for (unsigned int i = 0; i < nopt0; i++ ) {
+        const sbn::OpT0Finder &thisOpT0 = *opt0_v[i];
+        if (thisOpT0.score > max_score){
+          max_score = thisOpT0.score;
+          max_idx = i;
+        }
+      }
+
+      const sbn::OpT0Finder &maxOpT0 = *opt0_v[max_idx];
+      slice.opt0.tpc    = maxOpT0.tpc;
+      slice.opt0.time   = maxOpT0.time;
+      slice.opt0.score  = maxOpT0.score;
+      slice.opt0.measPE = maxOpT0.measPE;
+      slice.opt0.hypoPE = maxOpT0.hypoPE;
+      
+      // in case there are more matches, find the opt0 object with the second highest score
+      // usually this is filled for a slice that is split across two tpcs
+      if (nopt0>1){    
+        for (unsigned int i = 0; i < nopt0; i++ ) {
+          if (i == max_idx) continue;
+          const sbn::OpT0Finder &thisOpT0 = *opt0_v[i];
+          if (thisOpT0.score > sec_score){
+            sec_score = thisOpT0.score;
+            sec_idx = i;
+          }
+        }
+        const sbn::OpT0Finder &secOpT0 = *opt0_v[sec_idx];
+        slice.opt0_sec.tpc    = secOpT0.tpc;
+        slice.opt0_sec.time   = secOpT0.time;
+        slice.opt0_sec.score  = secOpT0.score;
+        slice.opt0_sec.measPE = secOpT0.measPE;
+        slice.opt0_sec.hypoPE = secOpT0.hypoPE;
+      }
+    }
+  }
+
+  void FillSliceLightCalo(const sbn::LightCalo *lightcalo,
+                          caf::SRSlice &slice)
+  {
+    if (lightcalo != nullptr) {
+      slice.lightcalo.charge    = lightcalo->charge;
+      slice.lightcalo.light     = lightcalo->light;
+      slice.lightcalo.energy    = lightcalo->energy;
+      slice.lightcalo.bestplane = lightcalo->bestplane; 
+    }
+  }
+
+  void FillSliceBarycenter(const std::vector<art::Ptr<recob::Hit>> &inputHits,
+                           const std::vector<art::Ptr<recob::SpacePoint>> &inputPoints,
+                           caf::SRSlice &slice)
+  {
+    unsigned int nHits = inputHits.size();
+    double sumCharge = 0.;
+    double sumX = 0.; double sumY = 0.; double sumZ = 0.;
+    double sumXX = 0.; double sumYY = 0.; double sumZZ = 0.;
+    double thisHitCharge, thisPointXYZ[3], chargeCenter[3], chargeWidth[3];
+
+    for ( unsigned int i = 0; i < nHits; i++ ) {
+      const recob::Hit &thisHit = *inputHits[i];
+      if ( thisHit.SignalType() != geo::kCollection ) continue;
+      art::Ptr<recob::SpacePoint> const& thisPoint = inputPoints.at(i);
+      if ( !thisPoint ) continue;
+
+      thisHitCharge = thisHit.Integral();
+      thisPointXYZ[0] = thisPoint->XYZ()[0];
+      thisPointXYZ[1] = thisPoint->XYZ()[1];
+      thisPointXYZ[2] = thisPoint->XYZ()[2];
+
+      sumCharge += thisHitCharge;
+      sumX += thisPointXYZ[0] * thisHitCharge;
+      sumY += thisPointXYZ[1] * thisHitCharge;
+      sumZ += thisPointXYZ[2] * thisHitCharge;
+      sumXX += thisPointXYZ[0] * thisPointXYZ[0] * thisHitCharge;
+      sumYY += thisPointXYZ[1] * thisPointXYZ[1] * thisHitCharge;
+      sumZZ += thisPointXYZ[2] * thisPointXYZ[2] * thisHitCharge;
+    }
+
+    if( sumCharge != 0 ) {
+      chargeCenter[0] = sumX / sumCharge;
+      chargeCenter[1] = sumY / sumCharge;
+      chargeCenter[2] = sumZ / sumCharge;
+      chargeWidth[0] = pow( (sumXX/sumCharge - pow(sumX/sumCharge, 2)), .5);
+      chargeWidth[1] = pow( (sumYY/sumCharge - pow(sumY/sumCharge, 2)), .5);
+      chargeWidth[2] = pow( (sumZZ/sumCharge - pow(sumZ/sumCharge, 2)), .5);
+
+      slice.charge_center.SetXYZ( chargeCenter[0], chargeCenter[1], chargeCenter[2] ); 
+      slice.charge_width.SetXYZ( chargeWidth[0], chargeWidth[1], chargeWidth[2] );
+    }
+  }
+
+  void FillSliceNuGraph(const std::vector<art::Ptr<recob::Hit>> &inputHits,
+                        const std::vector<art::Ptr<anab::FeatureVector<1>>> &ngFilterResult,
+                        const std::vector<art::Ptr<anab::FeatureVector<5>>> &ngSemanticResult,
+                        const std::vector<std::vector<art::Ptr<recob::Hit>>> &fmPFPartHits,
+                        const float vtx_wire[3], 
+                        const float vtx_tick[3],
+                        const float vtx_wire_dist, 
+                        const float vtx_tick_dist,
+                        const float filter_cut,
+                        caf::SRSlice &slice)
+  {
+
+    // NuGraph2 filter fraction
+    unsigned int nHits = inputHits.size();
+    unsigned int npass = 0;
+
+    assert(ngFilterResult.size() == nHits);
+    for ( auto const& ngFilt: ngFilterResult) {
+      if (!ngFilt) continue;
+      if (ngFilt->at(0) >= filter_cut) npass++;
+    }
+    slice.ng_filt_pass_frac = (nHits > 0) ? float(npass) / nHits : 0.f;
+
+    // look-up between hits and PFPs
+    std::set<art::Ptr<recob::Hit>> pfpHitSet;
+    for (const auto& pfpHits : fmPFPartHits) {
+      for (const auto& hit : pfpHits) {
+        if (hit) pfpHitSet.insert(hit);
+      }
+    }
+
+    // NuGraph2 plane-by-plane slice variables
+    for (unsigned int plane = 0; plane < 3; ++plane) {
+
+      int nMIPHits = 0;             // `MIP` hits in the slice
+      int nHIPHits = 0;             // `HIP` hits in the slice
+      int nShrHits = 0;             // `Shower` hits in the slice
+      int nMhlHits = 0;             // `Michel` hits in the slice
+      int nDifHits = 0;             // `Diffuse` hits in the slice
+      int nVtxHIPHits = 0;          // `HIP` hits in the slice around the vertex
+      int nUnclusteredShrHits = 0;  // `Shower` hits in the slice not belonging to a PFP
+
+      for ( unsigned int i = 0; i < nHits; i++ ) {
+        const recob::Hit& hit = *inputHits.at(i);
+        if (hit.WireID().Plane != plane) continue;
+
+        if (ngSemanticResult.at(i).isNull()) continue;
+
+        auto const& sem = *ngSemanticResult.at(i);
+        std::vector<float> semVec;
+        for (size_t k = 0; k < sem.size(); ++k) semVec.push_back(sem.at(k));
+        auto highestScoreIdx = std::distance(
+          semVec.begin(), 
+          std::max_element(semVec.begin(), semVec.end())
+        );
+
+        // `MIP` hits
+        if (highestScoreIdx == SRNuGraphScore::NuGraphCategory::MIP) {
+          nMIPHits += 1;
+        }
+
+        // `HIP` hits
+        if (highestScoreIdx == SRNuGraphScore::NuGraphCategory::HIP) {
+          nHIPHits += 1;
+
+          // `HIP` hits at vertex
+          float dwire = std::abs(float(hit.WireID().Wire) - vtx_wire[plane]);
+          float dtick = std::abs(hit.PeakTime() - vtx_tick[plane]);    
+          if ((dwire <= vtx_wire_dist) && (dtick <= vtx_tick_dist)) {
+            nVtxHIPHits += 1;
+          }
+        }
+
+        // `Shower` hits
+        if (highestScoreIdx == SRNuGraphScore::NuGraphCategory::Shower) {
+          nShrHits += 1;
+
+          // `Shower` hits not clustered by Pandora
+          art::Ptr<recob::Hit> hitPtr = inputHits.at(i);
+          if (pfpHitSet.find(hitPtr) == pfpHitSet.end()) {
+            nUnclusteredShrHits += 1;
+          }
+        }
+
+        // `Michel` hits
+        if (highestScoreIdx == SRNuGraphScore::NuGraphCategory::Michel) {
+          nMhlHits += 1;
+        }
+
+        // `Diffuse` hits
+        if (highestScoreIdx == SRNuGraphScore::NuGraphCategory::Diffuse) {
+          nDifHits += 1;
+        }
+      }
+
+      auto& hitInfo = slice.ng_plane[plane];
+      hitInfo.mip_hits = nMIPHits;
+      hitInfo.hip_hits = nHIPHits;
+      hitInfo.shr_hits = nShrHits;
+      hitInfo.mhl_hits = nMhlHits;
+      hitInfo.dif_hits = nDifHits;
+      hitInfo.ng_vtx_hip_hits = nVtxHIPHits;
+      hitInfo.unclustered_shr_hits = nUnclusteredShrHits;
+    }
+  }
+
+  //......................................................................
+
+
+  void FillTrackCRTHit(const std::vector<art::Ptr<anab::T0>> &t0match,
+                       const std::vector<art::Ptr<sbn::crt::CRTHit>> &hitmatch,
+                       const std::vector<art::Ptr<sbn::crt::CRTHitT0TaggingInfo>> &hitmatchinfo,
+                       bool use_ts0,
+                       int64_t CRT_T0_reference_time, // ns, signed
+                       double CRT_T1_reference_time, // us
+                       const std::map<std::pair<int, int>, sim::AuxDetSimChannel> &crtsimchanmap,
+                       caf::SRTrack &srtrack,
+                       bool allowEmpty)
+  {
+    // Francesco Poppi: In the current implementation, hitmatch and hitmatchinfo are
+    // vectors of pointers, but currently they are vector of size 1.
+    // The reason behind the current implementation is that we only store the 
+    // best CRT candidate in the selection, eventually, we can store a vector
+    // of "good" candidates and fill additional infos for all of them.
+    // This is a TODO.
+    if (t0match.size()) {
+      assert(t0match.size() == 1);
+      srtrack.crthit.distance = t0match[0]->fTriggerConfidence;
+      srtrack.crthit.region = t0match[0]->fID;
+      srtrack.crthit.sys = t0match[0]->fTriggerBits;
+      if(hitmatchinfo.size() == 1){
+        srtrack.crthit.deltaX = hitmatchinfo[0]->DeltaX;
+        srtrack.crthit.deltaY = hitmatchinfo[0]->DeltaY;
+        srtrack.crthit.deltaZ = hitmatchinfo[0]->DeltaZ;
+        srtrack.crthit.crossX = hitmatchinfo[0]->CrossX;
+        srtrack.crthit.crossY = hitmatchinfo[0]->CrossY;
+        srtrack.crthit.crossZ = hitmatchinfo[0]->CrossZ;      
+      }
+      srtrack.crthit.hit.time = t0match[0]->fTime / 1e3; /* ns -> us */
+      srtrack.crthit.hit.plane = t0match[0]->fID;
+    }
+    if (hitmatch.size()) {
+      FillCRTHit(*hitmatch[0], use_ts0, CRT_T0_reference_time, CRT_T1_reference_time, crtsimchanmap, srtrack.crthit.hit, allowEmpty);
+    }
+  }
+
+  void FillTrackCRTTrack(const std::vector<art::Ptr<anab::T0>> &t0match,
+                       caf::SRTrack &srtrack,
+                       bool allowEmpty)
+  {
+    if (t0match.size()) {
+      assert(t0match.size() == 1);
+      srtrack.crttrack.angle = t0match[0]->fTriggerConfidence;
+      srtrack.crttrack.time = t0match[0]->fTime / 1e3; /* ns -> us */
+
+      // TODO/FIXME: FILL MORE ONCE WE HAVE THE CRT HIT!!!
+
+    }
+  }
+
+  void FillTrackCRTSpacePoint(const anab::T0 &t0match,
+                              const sbnd::crt::CRTSpacePoint &spacepointmatch,
+                              const sbnd::crt::CRTCluster &cluster,
+                              caf::SRTrack &srtrack,
+                              bool allowEmpty)
+  {
+    srtrack.crtspacepoint.matched = true;
+    srtrack.crtspacepoint.score   = t0match.fTriggerConfidence;
+
+    FillCRTSpacePoint(spacepointmatch, cluster, srtrack.crtspacepoint.spacepoint);
+  }
+
+  void FillTrackSBNDCRTTrack(const anab::T0 &t0match,
+                             const art::Ptr<sbnd::crt::CRTTrack> &trackmatch,
+                             caf::SRTrack &srtrack,
+                             bool allowEmpty)
+  {
+    srtrack.crtsbndtrack.matched = true;
+    srtrack.crtsbndtrack.score   = t0match.fTriggerConfidence;
+
+    FillSBNDCRTTrack(*trackmatch, srtrack.crtsbndtrack.track);
+  }
+
+  void FillTrackMCS(const recob::Track& track,
+                    const std::array<std::vector<art::Ptr<recob::MCSFitResult>>, 4> &mcs_results,
+                    caf::SRTrack& srtrack,
+                    bool allowEmpty)
+  {
+    // gather MCS fits
+    if (mcs_results[0].size()) {
+      recob::MCSFitResult mcs_fit_muon = *mcs_results[0][0];
+
+      srtrack.mcsP.fwdP_muon     = mcs_fit_muon.fwdMomentum();
+      srtrack.mcsP.fwdP_err_muon = mcs_fit_muon.fwdMomUncertainty();
+      srtrack.mcsP.bwdP_muon     = mcs_fit_muon.bwdMomentum();
+      srtrack.mcsP.bwdP_err_muon = mcs_fit_muon.bwdMomUncertainty();
+
+      // Use the 0th result to also get the input values
+      srtrack.mcsP.seg_scatter_angles = mcs_fit_muon.scatterAngles();
+      srtrack.mcsP.seg_length = mcs_fit_muon.segmentRadLengths();
+    }
+
+    if (mcs_results[1].size()) {
+      recob::MCSFitResult mcs_fit_proton = *mcs_results[1][0];
+
+      srtrack.mcsP.fwdP_proton     = mcs_fit_proton.fwdMomentum();
+      srtrack.mcsP.fwdP_err_proton = mcs_fit_proton.fwdMomUncertainty();
+      srtrack.mcsP.bwdP_proton     = mcs_fit_proton.bwdMomentum();
+      srtrack.mcsP.bwdP_err_proton = mcs_fit_proton.bwdMomUncertainty();
+    }
+
+    if (mcs_results[2].size()) {
+      recob::MCSFitResult mcs_fit_pion = *mcs_results[2][0];
+
+      srtrack.mcsP.fwdP_pion     = mcs_fit_pion.fwdMomentum();
+      srtrack.mcsP.fwdP_err_pion = mcs_fit_pion.fwdMomUncertainty();
+      srtrack.mcsP.bwdP_pion     = mcs_fit_pion.bwdMomentum();
+      srtrack.mcsP.bwdP_err_pion = mcs_fit_pion.bwdMomUncertainty();
+    }
+
+    if (mcs_results[3].size()) {
+      recob::MCSFitResult mcs_fit_kaon = *mcs_results[3][0];
+
+      srtrack.mcsP.fwdP_kaon     = mcs_fit_kaon.fwdMomentum();
+      srtrack.mcsP.fwdP_err_kaon = mcs_fit_kaon.fwdMomUncertainty();
+      srtrack.mcsP.bwdP_kaon     = mcs_fit_kaon.bwdMomentum();
+      srtrack.mcsP.bwdP_err_kaon = mcs_fit_kaon.bwdMomUncertainty();
+    }
+  }
+
+  void FillTrackRangeP(const recob::Track& track,
+                       const std::array<std::vector<art::Ptr<sbn::RangeP>>, 3> &range_results,
+                       caf::SRTrack& srtrack,
+                       bool allowEmpty)
+  {
+    if (range_results[0].size()) {
+      srtrack.rangeP.p_muon = range_results[0][0]->range_p;
+      assert(track.ID() == range_results[0][0]->trackID);
+    }
+
+    if (range_results[1].size()) {
+      srtrack.rangeP.p_pion = range_results[1][0]->range_p;
+      assert(track.ID() == range_results[1][0]->trackID);
+    }
+
+    if (range_results[2].size()) {
+      srtrack.rangeP.p_proton = range_results[2][0]->range_p;
+      assert(track.ID() == range_results[2][0]->trackID);
+    }
+  }
+
+  void FillPlaneChi2PID(const anab::ParticleID &particle_id, caf::SRTrkChi2PID &srpid) {
+
+    // Assign dummy values.
+
+    srpid.chi2_muon = 0.;
+    srpid.chi2_pion = 0.;
+    srpid.chi2_kaon = 0.;
+    srpid.chi2_proton = 0.;
+    srpid.pid_ndof = 0;
+    srpid.pida = 0.;
+
+    // Loop over algorithm scores and extract the ones we want.
+    // Get the ndof from any chi2 algorithm
+
+    std::vector<anab::sParticleIDAlgScores> AlgScoresVec = particle_id.ParticleIDAlgScores();
+    for (size_t i_algscore=0; i_algscore<AlgScoresVec.size(); i_algscore++){
+      anab::sParticleIDAlgScores AlgScore = AlgScoresVec.at(i_algscore);
+      if (AlgScore.fAlgName == "Chi2"){
+        if (TMath::Abs(AlgScore.fAssumedPdg) == 13) { // chi2mu
+          srpid.chi2_muon = AlgScore.fValue;
+          srpid.pid_ndof = AlgScore.fNdf;
+        }
+        else if (TMath::Abs(AlgScore.fAssumedPdg) == 211) { // chi2pi
+          srpid.chi2_pion = AlgScore.fValue;
+          srpid.pid_ndof = AlgScore.fNdf;
+        }
+        else if (TMath::Abs(AlgScore.fAssumedPdg) == 321) { // chi2ka
+          srpid.chi2_kaon = AlgScore.fValue;
+          srpid.pid_ndof = AlgScore.fNdf;
+        }
+        else if (TMath::Abs(AlgScore.fAssumedPdg) == 2212) { // chi2pr
+          srpid.chi2_proton = AlgScore.fValue;
+          srpid.pid_ndof = AlgScore.fNdf;
+        }
+      }
+      else if (AlgScore.fVariableType==anab::kPIDA){
+        srpid.pida = AlgScore.fValue;
+      }
+    }
+  }
+
+  void FillTrackChi2PID(const std::vector<art::Ptr<anab::ParticleID>> particleIDs,
+                        caf::SRTrack& srtrack,
+                        bool allowEmpty)
+  {
+    // get the particle ID's
+    for (unsigned i = 0; i < particleIDs.size(); i++) {
+      const anab::ParticleID &particle_id = *particleIDs[i];
+      if (particle_id.PlaneID()) {
+        unsigned plane_id  = particle_id.PlaneID().Plane;
+        assert(plane_id < 3);
+        FillPlaneChi2PID(particle_id, srtrack.chi2pid[plane_id]);
+      }
+    }
+  }
+
+  void FillPlaneLikePID(const anab::ParticleID &particle_id, caf::SRTrkLikelihoodPID &srlikepid) {
+
+    // Loop over algorithm scores and extract the ones we want.
+    // Get the ndof from any likelihood pid algorithm
+    srlikepid.setDefault();
+
+    std::vector<anab::sParticleIDAlgScores> const& AlgScoresVec = particle_id.ParticleIDAlgScores();
+    for (anab::sParticleIDAlgScores const& AlgScore: AlgScoresVec){
+      if (AlgScore.fAlgName == "Likelihood"){
+        switch (std::abs(AlgScore.fAssumedPdg)) {
+          case 13: // lambda_mu
+            srlikepid.lambda_muon = AlgScore.fValue;
+            srlikepid.pid_ndof = AlgScore.fNdf;
+            break;
+          case 211: // lambda_pi
+            srlikepid.lambda_pion = AlgScore.fValue;
+            srlikepid.pid_ndof = AlgScore.fNdf;
+            break;
+          case 2212: // lambda_pr
+            srlikepid.lambda_proton = AlgScore.fValue;
+            srlikepid.pid_ndof = AlgScore.fNdf;
+            break;
+        }
+      }
+    }
+  }
+
+  void FillTrackLikePID(const std::vector<art::Ptr<anab::ParticleID>>& particleIDs,
+                        caf::SRTrack& srtrack,
+                        bool allowEmpty)
+  {
+    // get the particle ID's
+    for (art::Ptr<anab::ParticleID> const& pidPtr: particleIDs) {
+      const anab::ParticleID &particle_id = *pidPtr;
+      if (particle_id.PlaneID()) {
+        unsigned plane_id  = particle_id.PlaneID().Plane;
+        assert(plane_id < 3);
+        FillPlaneLikePID(particle_id, srtrack.likepid[plane_id]);
+      }
+    }
+  }
+
+  void FillTrackPlaneCalo(const anab::Calorimetry &calo, 
+        const std::vector<art::Ptr<recob::Hit>> &hits,
+        bool fill_calo_points, float fillhit_rrstart, float fillhit_rrend, 
+        const detinfo::DetectorPropertiesData &dprop,
+        caf::SRTrackCalo &srcalo) {
+
+    // Collect info from Calorimetry
+    const std::vector<float> &dqdx = calo.dQdx();
+    const std::vector<float> &dedx = calo.dEdx();
+    const std::vector<float> &pitch = calo.TrkPitchVec();
+    const std::vector<float> &rr = calo.ResidualRange();
+    const std::vector<float> &efield = calo.Efield();
+    const std::vector<float> &phi = calo.Phi();
+    const std::vector<geo::Point_t> &xyz = calo.XYZ();
+    const std::vector<size_t> &tps = calo.TpIndices();
+
+    srcalo.charge = 0.;
+    srcalo.ke = 0.;
+    srcalo.nhit = 0;
+
+    float rrmax = !rr.empty() ? *std::max_element(rr.begin(), rr.end()) : 0.;
+
+    for (unsigned i = 0; i < dedx.size(); i++) {
+      // Save the points we need to
+      if (fill_calo_points && (
+          (rrmax - rr[i]) < fillhit_rrstart || // near start
+          rr[i] < fillhit_rrend)) { // near end
+
+        // Point information
+        caf::SRCaloPoint p;
+        p.rr = rr[i];
+        p.dqdx = dqdx[i];
+        p.dedx = dedx[i];
+        p.pitch = pitch[i];
+        p.efield = efield[i];
+        p.phi = phi[i] * M_PI / 180.; // converting to radian since calo.Phi() is in degree
+        p.x = xyz[i].x();
+        p.y = xyz[i].y();
+        p.z = xyz[i].z();
+
+        // lookup the wire -- the Calorimery object makes this
+        // __way__ harder than it should be
+        for (const art::Ptr<recob::Hit> &h: hits) {
+          if (h.key() == tps[i]) {
+            p.wire = h->WireID().Wire;
+            p.tpc = h->WireID().TPC;
+            p.channel = h->Channel();
+            p.sumadc = h->ROISummedADC();
+            p.integral = h->Integral();
+            p.t = h->PeakTime();
+            p.width = h->RMS();
+            p.mult = h->Multiplicity();
+            p.start = h->StartTick();
+            p.end = h->EndTick();
+          }
+        }
+
+        // Save
+        srcalo.points.push_back(p);
+      }
+
+      if (dedx[i] > 1000.) continue;
+      srcalo.nhit ++;
+      srcalo.charge += dqdx[i] * pitch[i]; // ADC
+      srcalo.ke += dedx[i] * pitch[i];
+    }
+
+    // Sort the points by residual range hi->lo
+    std::sort(srcalo.points.begin(), srcalo.points.end(),
+      [](const caf::SRCaloPoint &lhs, const caf::SRCaloPoint &rhs) {
+        return lhs.rr > rhs.rr;
+    });
+
+  }
+
+  void FillTrackScatterClosestApproach(const art::Ptr<sbn::ScatterClosestApproach> closestapproach,
+      caf::SRTrack& srtrack,
+      bool allowEmpty)
+  {
+    srtrack.scatterClosestApproach.mean = closestapproach->mean;
+    srtrack.scatterClosestApproach.stdDev = closestapproach->stdDev;
+    srtrack.scatterClosestApproach.max = closestapproach->max;
+  }
+
+  void FillTrackStoppingChi2Fit(const art::Ptr<sbn::StoppingChi2Fit> stoppingChi2,
+      caf::SRTrack& srtrack,
+      bool allowEmpty)
+  {
+    srtrack.stoppingChi2Fit.pol0Chi2 = stoppingChi2->pol0Chi2;
+    srtrack.stoppingChi2Fit.expChi2  = stoppingChi2->expChi2;
+    srtrack.stoppingChi2Fit.pol0Fit  = stoppingChi2->pol0Fit;
+  }
+
+  void FillTrackDazzle(const art::Ptr<sbn::MVAPID> dazzle,
+      caf::SRTrack& srtrack,
+      bool allowEmpty)
+  {
+    srtrack.dazzle.muonScore = dazzle->mvaScoreMap.at(13);
+    srtrack.dazzle.pionScore = dazzle->mvaScoreMap.at(211);
+    srtrack.dazzle.protonScore = dazzle->mvaScoreMap.at(2212);
+    srtrack.dazzle.otherScore = dazzle->mvaScoreMap.at(0);
+
+    srtrack.dazzle.pdg = dazzle->BestPDG();
+    srtrack.dazzle.bestScore = dazzle->BestScore();
+  }
+
+  void FillTrackCalo(const std::vector<art::Ptr<anab::Calorimetry>> &calos,
+                     const std::vector<art::Ptr<recob::Hit>> &hits,
+                     bool fill_calo_points, float fillhit_rrstart, float fillhit_rrend,
+                     const detinfo::DetectorPropertiesData &dprop,
+                     caf::SRTrack& srtrack,
+                     bool allowEmpty)
+  {
+    // count up the kinetic energy on each plane --
+    // ignore any charge with a deposition > 1000 MeV/cm
+    // TODO: ignore first and last hit???
+    //    assert(calos.size() == 0 || calos == 3);
+    for (unsigned i = 0; i < calos.size(); i++) {
+      const anab::Calorimetry &calo = *calos[i];
+      if (calo.PlaneID()) {
+        unsigned plane_id = calo.PlaneID().Plane;
+        assert(plane_id < 3);
+        FillTrackPlaneCalo(calo, hits, fill_calo_points, fillhit_rrstart, fillhit_rrend, dprop, srtrack.calo[plane_id]);
+      }
+    }
+
+    // Set the plane with the most hits
+    //
+    // We expect the noise to be lowest at planes 2 -> 0 -> 1, so use this to break ties
+    caf::Plane_t bestplane = caf::kUnknown;
+    int bestnhit = -1;
+    for(int plane: {2, 0, 1}){
+      if(srtrack.calo[plane].nhit > bestnhit){
+        bestplane = caf::Plane_t(plane);
+        bestnhit = srtrack.calo[plane].nhit;
+      }
+    }
+
+    srtrack.bestplane = bestplane;
+
+  }
+
+  // TODO: crt matching
+
+  void FillTrackVars(const recob::Track& track,
+                     unsigned producer,
+                     caf::SRTrack& srtrack,
+                     bool allowEmpty)
+  {
+
+    srtrack.producer = producer;
+    srtrack.npts = track.CountValidPoints();
+    srtrack.len  = track.Length();
+    srtrack.costh = track.StartDirection().Z() / sqrt(track.StartDirection().Mag2());
+    srtrack.phi = track.StartDirection().Phi();
+
+    srtrack.dir_end.x = track.EndDirection().X();
+    srtrack.dir_end.y = track.EndDirection().Y();
+    srtrack.dir_end.z = track.EndDirection().Z();
+
+    srtrack.dir.x = track.StartDirection().X();
+    srtrack.dir.y = track.StartDirection().Y();
+    srtrack.dir.z = track.StartDirection().Z();
+
+    srtrack.start.x = track.Start().X();
+    srtrack.start.y = track.Start().Y();
+    srtrack.start.z = track.Start().Z();
+
+    srtrack.end.x = track.End().X();
+    srtrack.end.y = track.End().Y();
+    srtrack.end.z = track.End().Z();
+
+  }
+
+  void FillPFPVars(const recob::PFParticle &particle,
+                   const recob::PFParticle *primary,
+                   const larpandoraobj::PFParticleMetadata *pfpMeta,
+                   const art::Ptr<anab::T0> t0,
+                   caf::SRPFP& srpfp,
+                   const PFOCharLabelsStruct& pfoCharLabels,
+                   bool allowEmpty)
+  {
+    srpfp.id = particle.Self();
+    srpfp.slcID = (primary) ? primary->Self() : -1;
+
+    // set the daughters in the particle flow
+    for (unsigned id: particle.Daughters()) {
+      srpfp.daughters.push_back(id);
+    }
+    srpfp.ndaughters = srpfp.daughters.size();
+
+    srpfp.parent = particle.Parent();
+    srpfp.parent_is_primary = (particle.Parent() == recob::PFParticle::kPFParticlePrimary) \
+      || (primary && particle.Parent() == primary->Self());
+
+    if (pfpMeta) {
+      auto const &propertiesMap (pfpMeta->GetPropertiesMap());
+      auto const &pfpTrackScoreIter(propertiesMap.find("TrackScore"));
+      srpfp.trackScore = (pfpTrackScoreIter == propertiesMap.end()) ? -5.f : pfpTrackScoreIter->second;
+
+      // Pfo Characterisation features
+      srpfp.pfochar.setDefault();
+
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.EndFractionName,           srpfp.pfochar.chgendfrac);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.FractionalSpreadName,      srpfp.pfochar.chgfracspread);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.DiffStraightLineMeanName,  srpfp.pfochar.linfitdiff);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.LengthName,                srpfp.pfochar.linfitlen);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.MaxFitGapLengthName,       srpfp.pfochar.linfitgaplen);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.SlidingLinearFitRMSName,   srpfp.pfochar.linfitrms);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.AngleDiffName,             srpfp.pfochar.openanglediff);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.SecondaryPCARatioName,     srpfp.pfochar.pca2ratio);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.TertiaryPCARatioName,      srpfp.pfochar.pca3ratio);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.VertexDistanceName,        srpfp.pfochar.vtxdist);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.HaloTotalRatioName,        srpfp.pfochar.halototratio);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.ConcentrationName,         srpfp.pfochar.concentration);
+      CopyPropertyIfSet(propertiesMap, pfoCharLabels.ConicalnessName,           srpfp.pfochar.conicalness);
+    }
+    if (t0) {
+      srpfp.t0 = t0->Time() / 1e3; /* ns -> us */
+    }
+  }
+
+  void FillCNNScores(const recob::PFParticle &particle,
+                     const sbn::PFPCNNScore *cnnscore,
+                     caf::SRPFP& srpfp,
+                     bool allowEmpty)
+  {
+    srpfp.cnnscore.track = cnnscore->pfpTrackScore;
+    srpfp.cnnscore.shower = cnnscore->pfpShowerScore;
+    srpfp.cnnscore.noise = cnnscore->pfpNoiseScore;
+    srpfp.cnnscore.michel = cnnscore->pfpMichelScore;
+    srpfp.cnnscore.endmichel = cnnscore->pfpEndMichelScore;
+    srpfp.cnnscore.nclusters = cnnscore->nClusters;
+  }
+
+  void FillPFPNuGraph(const std::vector<art::Ptr<recob::Hit>> &pfpHits,
+		      const std::vector<art::Ptr<anab::FeatureVector<1>>> &ngFilterResult,
+		      const std::vector<art::Ptr<anab::FeatureVector<5>>> &ngSemanticResult,
+          const float filter_cut,
+		      caf::SRPFP& srpfp,
+		      bool allowEmpty)
+  {
+    if (pfpHits.size() > 0) {
+      std::vector<float> ng2sempfpcounts(5, 0);
+      size_t ng2bkgpfpcount = 0;
+
+      for (size_t pos = 0; pos < pfpHits.size(); pos++) {
+
+        if (ngFilterResult.at(pos).isNull()) continue;
+
+        auto const& bkgscore = ngFilterResult.at(pos);
+        if (bkgscore->at(0) < filter_cut) {
+          ng2bkgpfpcount++;
+        } else {
+          if (ngSemanticResult.at(pos).isNull()) continue;
+          auto const& scores = ngSemanticResult.at(pos);
+          std::vector<float> ng2semscores;
+          for (size_t i = 0; i < scores->size(); i++) 
+            ng2semscores.push_back(scores->at(i));
+          size_t sem_label = std::distance(ng2semscores.begin(), std::max_element(ng2semscores.begin(), ng2semscores.end()));//arg_max(ng2semscores);
+          ng2sempfpcounts[sem_label]++;
+        }
+      }
+
+      srpfp.ngscore.sem_cat = SRNuGraphScore::NuGraphCategory(std::distance(ng2sempfpcounts.begin(), std::max_element(ng2sempfpcounts.begin(), ng2sempfpcounts.end())));//arg_max(ng2sempfpcounts);
+      size_t nonBkgHits = (pfpHits.size() > ng2bkgpfpcount ? pfpHits.size()-ng2bkgpfpcount : 0);
+      srpfp.ngscore.mip_frac = (nonBkgHits>0 ? float(ng2sempfpcounts[0])/nonBkgHits : -1.);
+      srpfp.ngscore.hip_frac = (nonBkgHits>0 ? float(ng2sempfpcounts[1])/nonBkgHits : -1.);
+      srpfp.ngscore.shr_frac = (nonBkgHits>0 ? float(ng2sempfpcounts[2])/nonBkgHits : -1.);
+      srpfp.ngscore.mhl_frac = (nonBkgHits>0 ? float(ng2sempfpcounts[3])/nonBkgHits : -1.);
+      srpfp.ngscore.dif_frac = (nonBkgHits>0 ? float(ng2sempfpcounts[4])/nonBkgHits : -1.);
+      srpfp.ngscore.bkg_frac = float(ng2bkgpfpcount)/pfpHits.size();
+    } else {
+      srpfp.ngscore.sem_cat = SRNuGraphScore::NuGraphCategory::Unset;
+      srpfp.ngscore.mip_frac = -1.;
+      srpfp.ngscore.hip_frac = -1.;
+      srpfp.ngscore.shr_frac = -1.;
+      srpfp.ngscore.mhl_frac = -1.;
+      srpfp.ngscore.dif_frac = -1.;
+      srpfp.ngscore.bkg_frac = -1.;
+    }
+  }
+
+  void FillHitVars(const recob::Hit& hit,
+                   unsigned producer,
+                   const recob::SpacePoint& spacepoint,
+                   const recob::PFParticle& particle,
+                   caf::SRHit& srhit,
+                   bool allowEmpty)
+  {
+    srhit.setDefault();
+
+    srhit.peakTime = hit.PeakTime();
+    srhit.RMS = hit.RMS();
+
+    srhit.peakAmplitude = hit.PeakAmplitude();
+    srhit.integral = hit.Integral();
+
+    const geo::WireID wire = hit.WireID();
+    srhit.cryoID = wire.Cryostat;
+    srhit.tpcID = wire.TPC;
+    srhit.planeID = wire.Plane;
+    srhit.wireID = wire.Wire;
+    srhit.spacepoint.XYZ = SRVector3D (spacepoint.XYZ());
+    srhit.spacepoint.chisq = spacepoint.Chisq();
+    srhit.spacepoint.pfpID = particle.Self();
+    srhit.spacepoint.ID = spacepoint.ID();
+  }
+
+  void FillTPCPMTBarycenterMatch(const sbn::TPCPMTBarycenterMatch *matchInfo,
+                           caf::SRSlice& slice)
+  { 
+    slice.barycenterFM.setDefault();
+
+    if ( matchInfo != nullptr ) {
+      slice.barycenterFM.chargeTotal  = matchInfo->chargeTotal;
+      slice.barycenterFM.chargeCenterXLocal  = matchInfo->chargeCenterXLocal;
+      slice.barycenterFM.chargeCenter  = SRVector3D (matchInfo->chargeCenter.x(), matchInfo->chargeCenter.y(), matchInfo->chargeCenter.z());
+      slice.barycenterFM.chargeWidth  = SRVector3D (matchInfo->chargeWidth.x(), matchInfo->chargeWidth.y(), matchInfo->chargeWidth.z());
+      slice.barycenterFM.flashFirstHit  = matchInfo->flashFirstHit;
+      slice.barycenterFM.flashTime  = matchInfo->flashTime;
+      slice.barycenterFM.flashPEs  = matchInfo->flashPEs;
+      slice.barycenterFM.flashCenter  = SRVector3D (matchInfo->flashCenter.x(), matchInfo->flashCenter.y(), matchInfo->flashCenter.z());
+      slice.barycenterFM.flashWidth  = SRVector3D (matchInfo->flashWidth.x(), matchInfo->flashWidth.y(), matchInfo->flashWidth.z());
+      slice.barycenterFM.deltaT  = matchInfo->deltaT;
+      slice.barycenterFM.deltaY  = matchInfo->deltaY;
+      slice.barycenterFM.deltaZ  = matchInfo->deltaZ;
+      slice.barycenterFM.radius  = matchInfo->radius;
+      slice.barycenterFM.overlapY  = matchInfo->overlapY;
+      slice.barycenterFM.overlapZ  = matchInfo->overlapZ;
+      slice.barycenterFM.deltaZ_Trigger  = matchInfo->deltaZ_Trigger;
+      slice.barycenterFM.deltaY_Trigger  = matchInfo->deltaY_Trigger;
+      slice.barycenterFM.radius_Trigger  = matchInfo->radius_Trigger;
+      slice.barycenterFM.score  = matchInfo->score;
+      slice.barycenterFM.chi2  = matchInfo->chi2;
+    }
+  }
+
+  void FillCVNScores(const lcvn::Result *cvnResult,
+                           caf::SRSlice& slice)
+  { 
+
+    if ( cvnResult != nullptr ) {
+      auto const & cvn = cvnResult->fOutput;
+      if (cvn.size()==1 && cvn[0].size()==4){
+        slice.cvn.numuscore    = cvn[0][0];
+        slice.cvn.nuescore     = cvn[0][1];
+        slice.cvn.cosmicscore  = cvn[0][2];
+        slice.cvn.ncscore      = cvn[0][3];
+      }
+      else{
+        std::cout<<"CVN result does not have the correct dimensions."<<std::endl;
+      }
+    }
+  }
+  
+  //......................................................................
+
+  void FillPFPRazzled(const art::Ptr<sbn::MVAPID> razzled,
+                      caf::SRPFP& srpfp,
+                      bool allowEmpty)
+  {
+    srpfp.razzled.electronScore = razzled->mvaScoreMap.at(11);
+    srpfp.razzled.muonScore = razzled->mvaScoreMap.at(13);
+    srpfp.razzled.photonScore = razzled->mvaScoreMap.at(22);
+    srpfp.razzled.pionScore = razzled->mvaScoreMap.at(211);
+    srpfp.razzled.protonScore = razzled->mvaScoreMap.at(2212);
+
+    srpfp.razzled.pdg = razzled->BestPDG();
+    srpfp.razzled.bestScore = razzled->BestScore();
+  }
+
+  //......................................................................
+
+  void SetNuMuCCPrimary(std::vector<caf::StandardRecord> &recs,
+                        std::vector<caf::SRTrueInteraction> &srneutrinos) {
+  //   // set is_primary to true by default
+  //   for (caf::StandardRecord &rec: recs) {
+  //     rec.slc.tmatch.is_numucc_primary = true;
+  //   }
+
+  //   for (unsigned i = 0; i < srneutrinos.size(); i++) {
+  //     ApplyNumuCCMatching(recs, srneutrinos, i);
+  //   }
+  }
+
+  void ApplyNumuCCMatching(std::vector<caf::StandardRecord> &recs,
+                           const std::vector<caf::SRTrueInteraction> &srneutrinos,
+                           unsigned truth_ind) {
+
+  //   std::vector<unsigned> matches_truth;
+  //   for (unsigned i = 0; i < recs.size(); i++) {
+  //     if (recs[i].slc.tmatch.index == (int)truth_ind) {
+  //       matches_truth.push_back(i);
+  //     }
+  //   }
+
+  //   // first -- remove any cases where most of the slice
+  //   // matches to non-primary particles of the neutrino
+  //   unsigned ind = 0;
+  //   std::vector<float> matching_primary_energy;
+  //   while (ind < matches_truth.size()) {
+  //     const caf::SRSliceRecoBranch &reco = recs[matches_truth[ind]].reco;
+  //     const caf::SRSlice &slice = recs[matches_truth[ind]].slc;
+
+  //     caf::SRVector3D vertex = slice.vertex;
+
+  //     float primary_energy = 0.;
+  //     float total_energy = 0.;
+
+  //     // check the primary tracks of the slice
+  //     for (const caf::SRTrack &track: reco.trk) {
+  //       caf::SRVector3D start = track.start;
+  //       float dist = sqrt((start.x - vertex.x) * (start.x - vertex.x) +
+  //                         (start.y - vertex.y) * (start.y - vertex.y) +
+  //                         (start.z - vertex.z) * (start.z - vertex.z));
+
+  //       if (track.parent == slice.self && dist < 10.) {
+  //         for (const caf::SRTrackTruth::ParticleMatch &pmatch: track.truth.matches) {
+  //           total_energy += pmatch.energy;
+  //           for (unsigned i_part = 0; i_part < recs[0].true_particles.size(); i_part++) {
+  //             const caf::SRTrueParticle &particle = recs[0].true_particles[i_part];
+  //             if (particle.G4ID == pmatch.G4ID) {
+  //               if (particle.start_process == caf::kG4primary) {
+  //                 primary_energy += pmatch.energy;
+  //               }
+  //               break;
+  //             }
+  //           }
+  //         }
+  //       }
+  //     }
+  //     if (primary_energy / total_energy < 0.5) {
+  //       recs[matches_truth[ind]].slc.tmatch.is_numucc_primary = false;
+  //       matches_truth.erase(matches_truth.begin()+ind);
+  //     }
+  //     else {
+  //       matching_primary_energy.push_back(primary_energy);
+  //       ind ++;
+  //     }
+  //   }
+
+  //   // less than two matches! All good
+  //   if (matches_truth.size() < 2) return;
+
+  //   // If this is a numu CC interaction, break
+  //   // tie by matching the muon
+  //   // Whoever has a track matching closer to the
+  //   // start of the muon wins
+  //   if (abs(srneutrinos[truth_ind].pdg == 14) && srneutrinos[truth_ind].iscc) {
+  //     const caf::SRTrueParticle &muon = srneutrinos[truth_ind].prim[0];
+  //     float closest_dist = -1;
+  //     int best_index = -1;
+  //     for (unsigned ind = 0; ind < matches_truth.size(); ind++) {
+  //       const caf::SRSliceRecoBranch &reco = recs[matches_truth[ind]].reco;
+  //       const caf::SRSlice &slice = recs[matches_truth[ind]].slc;
+
+  //       caf::SRVector3D vertex = slice.vertex;
+
+  //       for (const caf::SRTrack &track: reco.trk) {
+  //         caf::SRVector3D start = track.start;
+  //         float dist = sqrt((start.x - vertex.x) * (start.x - vertex.x) +
+  //                           (start.y - vertex.y) * (start.y - vertex.y) +
+  //                           (start.z - vertex.z) * (start.z - vertex.z));
+
+  //         if (track.parent == slice.self && dist < 10. && track.truth.matches.size()) {
+  //           const caf::SRTrackTruth::ParticleMatch &pmatch = track.truth.matches[0];
+  //           if (pmatch.energy / muon.planeVisE > 0.05 && pmatch.G4ID == muon.G4ID) {
+  //              caf::SRVector3D start = track.start;
+  //              caf::SRVector3D end = track.end;
+  //              float start_dist = sqrt((start.x - muon.start.x) * (start.x - muon.start.x) +
+  //                                      (start.y - muon.start.y) * (start.y - muon.start.y) +
+  //                                      (start.z - muon.start.z) * (start.z - muon.start.z));
+  //              float end_dist = sqrt((end.x - muon.start.x) * (end.x - muon.start.x) +
+  //                                    (end.y - muon.start.y) * (end.y - muon.start.y) +
+  //                                    (end.z - muon.start.z) * (end.z - muon.start.z));
+  //              float this_dist = std::min(start_dist, end_dist);
+  //              if (closest_dist < 0. || this_dist < closest_dist) {
+  //                closest_dist = this_dist;
+  //                best_index = ind;
+  //              }
+  //           }
+  //         }
+  //       }
+  //     }
+
+  //     // found a match!
+  //     if (best_index >= 0) {
+  //       for (unsigned i = 0; i < matches_truth.size(); i++) {
+  //         if ((int)i == best_index) recs[matches_truth[i]].slc.tmatch.is_numucc_primary = true;
+  //         else                 recs[matches_truth[i]].slc.tmatch.is_numucc_primary = false;
+  //       }
+  //       return;
+  //     }
+  //     // no match :( fallback on non numu-CC matching
+  //     else {}
+  //   }
+
+  //   // Otherwise, take the most energetic one
+  //   unsigned best_index = std::distance(matching_primary_energy.begin(),
+  //                                       std::max_element(matching_primary_energy.begin(), matching_primary_energy.end()));
+
+  //   for (unsigned i = 0; i < matches_truth.size(); i++) {
+  //     if (i == best_index) recs[matches_truth[i]].slc.tmatch.is_numucc_primary = true;
+  //     else                 recs[matches_truth[i]].slc.tmatch.is_numucc_primary = false;
+  //   }
+    return;
+  }
+
+  //......................................................................
+  template<class T, class U>
+  void CopyPropertyIfSet( const std::map<std::string, T>& props, const std::string& search, U& value )
+  {
+    auto it = props.find(search);
+    if ( it != props.end() ) value = it->second;
+  }
+
+} // end namespace
