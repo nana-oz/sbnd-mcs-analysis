@@ -1,9 +1,11 @@
-## Double Gaussian function from MicroBooNE paper
+# Double Gaussian function from MicroBooNE paper
 $f(\theta; E_{\mu}) =  \frac{A(E_{\mu})}{\sigma_1(E_{\mu})\sqrt{2\pi}}e^{\theta^2/2{\sigma}^2_1(E_{\mu})} + \frac{1 − A(E_{\mu})}{\sigma_2 (E_{\mu})\sqrt{2\pi}}e^{\theta^2/2σ^2_2(E_{\mu})}$
 - $\theta$ is the measured scattering angle
 - $E_{\mu}$ is the energy of the muon
 
-## What the original `mcs_MCSimStudy.ipynb` contains
+# What the original `mcs_MCSimStudy.ipynb` contains
+
+## Prototype
 ### Single Gaussian
 Single Gaussian is plotted using `plt.plot(x, pdf, color='red', linewidth=2, label='Fitted Gaussian')`, where:
 
@@ -36,13 +38,13 @@ Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_
 - `energyBounds=[0.7, 1.5]` ... $E_{\mu}$
 
 
-## Root's Optimizer for Fitting
-### Overview
+### Root's Optimizer for Fitting
+#### Overview
 1. Hardcode initial values (initial guesses)
 2. Convert Data and Functions to C++ ROOT
 3. Optimize parameters using `.Fit()`
 
-### Detail
+#### Detail
 `h_dtheta_xz.Fit(func1, "S")`. `.Fit()` is used for parameter fitting. 
 - Ref: https://root.cern/manual/fitting/
 - It adjusts 6 parameters (`scale`, `fraction`, `mu`, `sigma`, `mu_tail`, `sigma_tail`) at once to lower $\chi^2$.
@@ -50,7 +52,15 @@ Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_
 
 Function `th1_from_series` is defined to optimize the tuning process. Details are in Appendix.
 
-## Appendix 
+## Prototype --> Stage 0
+
+
+## Stage 0 (Detector Calibration)
+
+## Stage 1 (Tail Tuning & Physics)
+
+
+# Appendix 
 
 ### Explanation of how the Root's Optimizer for Fitting work (memo):
 
