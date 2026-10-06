@@ -2,6 +2,8 @@
 $f(\theta; E_{\mu}) =  \frac{A(E_{\mu})}{\sigma_1(E_{\mu})\sqrt{2\pi}}e^{\theta^2/2{\sigma}^2_1(E_{\mu})} + \frac{1 − A(E_{\mu})}{\sigma_2 (E_{\mu})\sqrt{2\pi}}e^{\theta^2/2σ^2_2(E_{\mu})}$
 - $\theta$ is the measured scattering angle
 - $E_{\mu}$ is the energy of the muon
+- $\sigma_1(E_{\mu}) = \sigma_{\text{pred}}(E_\mu) = \sqrt{\frac{2}{3}\kappa^2(E_\mu)\sigma_H^2(E_\mu) + \sigma_{\text{res}}^2}$
+- $\sigma_H \approx \frac{S_2}{p c \beta} = \frac{S_2}{E_\mu \left( 1 - \frac{m^2}{E_\mu^2} \right)}$, where $S_2 = 13.6$ MeV and $m \approx 105.7$ MeV (muon mass)
 
 # What the original `mcs_MCSimStudy.ipynb` contains
 
@@ -32,7 +34,7 @@ Double Gaussian is plotted using ` plt.plot(x, double_pdf, color='orange', linew
   - `pdf_tail = scale*(1-fraction) * np.exp(-0.5 * ((x - mu_tail) / sigma_tail) ** 2)` ... Probability for tail gaus with initial guesses:
     - `mu_tail` = 0.
     - `sigma_tail` = 14100. ... $\sigma_2(E_{\mu})$
-    - '1-fraction` = (1-0.02) ... $1-A(E_{\mu})$ from the paper (how much each Gaussian contributes to the total PDF area)
+    - `1-fraction` = (1-0.02) ... $1-A(E_{\mu})$ from the paper (how much each Gaussian contributes to the total PDF area)
 
 Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_fit_5param(muon_gen2, 'dtheta_yz_prime', xrange=[-500,500], energyBounds=[0.7, 1.5], name=r"$\theta_{yz}^'$",nbins=100,core=True,tail=True)`
 - `energyBounds=[0.7, 1.5]` ... $E_{\mu}$
@@ -56,8 +58,32 @@ Function `th1_from_series` is defined to optimize the tuning process. Details ar
 
 
 ## Stage 0 (Detector Calibration)
+### Stage 0 -- Version 0 (not complete)
+- Goal: Extract $\sigma_{\text{res}}$ in $\sigma_{\text{pred}}^2(E_\mu) = \frac{2}{3}\kappa^2(E_\mu)\sigma_H^2(E_\mu) + \sigma_{\text{res}}^2$.
+- Energy selection: High energy ($0.7\text{--}1.5\text{ GeV}$) where scattering is minimal.
+- Outcome: Intrinsic Detector Resolution ($\sigma_{\text{res}}$)
+
+- Detector Angular Resolution ($\sigma_{\text{res}}$): Hardware noise, wire spacing, and reconstruction smearing. It is constant and independent of track energy.
+- Multiple Coulomb Scattering ($\sigma_H$): Pure physics of muons interacting with Liquid Argon nuclei. It scales inversely with energy ($1/E_\mu$).
+
+
+Function `double_gaus_subplots` is set in the stage 0. Inside the function:
+- `sig_H = 13.6/(E_mean*(1-((mu_mass_MeV**2)/(E_mean**2))))` = $\sigma_H = \frac{13.6}{E_{\mu}\left(1-\frac{m^2}{E^2_{\mu}}\right)}$
+  - `13.6` ... $S_2 = 13.6 MeV$
+  - `mu_mass` ... muon mass in MeV. (`mu_mass_MeV = 105.7`)
+  - `E_mean` ... is calculated with `E = (((p**2.)+(mu_mass**2.))**0.5)` where `mu_mass = .1057 #GeV/c^2`, `p` is muon momenta.
+
+### Stage 0 -- Version 3
+Function `double_gaus_stageZero_v3(df, column, energyBounds=[0.1, 0.9], maxBin=[0.7, 1.5], sigLims=None, eStep=0.1, xranges=None, yranges=None, initParams=[], nbins=1000, fitRange=None, errdf=False, core=True, tail=False, rebin=None)`. 
+- Calculation of `sig_H` is the same as v0. `sig_H = 13.6 / (E_mean * (1 - ((mu_mass_MeV**2) / (E_mean**2))))`.
+- 
 
 ## Stage 1 (Tail Tuning & Physics)
+- Goal: Validate scattering predictions ($\sigma_H$) across energy.
+- Energy selection: Low energy ($0.1\text{--}0.9\text{ GeV}$) where scattering dominates.
+- Outcome: Low-Energy Model Validation & Tuning ($\chi^2/\text{ndf}$)
+
+Function `sigma1_fit(series,sig_res_arr,sig_H,meanEnergy,nbins=1000,fitRanges=None,initSubList=None,rebin=None)`.
 
 
 # Appendix 
