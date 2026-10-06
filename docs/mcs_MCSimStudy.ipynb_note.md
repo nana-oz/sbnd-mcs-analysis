@@ -37,7 +37,17 @@ Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_
 
 
 ## Root's Optimizer for Fitting
-Function `th1_from_series` is defined to optimize the tuning parameters. Details are in Appendix.
+### Overview
+1. Hardcode initial values (initial guesses)
+2. Convert Data and Functions to C++ ROOT
+3. Optimize parameters using `.Fit()`
+
+### Detail
+`h_dtheta_xz.Fit(func1, "S")`. `.Fit()` is used for parameter fitting. 
+- Ref: https://root.cern/manual/fitting/
+- It adjusts 6 parameters (scale, fraction, $\mu$, $\sigma$, $\mu_tail$, $\sigma_tail$) at once to lower $\chi^2$.
+
+Function `th1_from_series` is defined to optimize the tuning process. Details are in Appendix.
 
 ## Appendix 
 
