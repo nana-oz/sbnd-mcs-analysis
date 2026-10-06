@@ -45,7 +45,8 @@ Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_
 ### Detail
 `h_dtheta_xz.Fit(func1, "S")`. `.Fit()` is used for parameter fitting. 
 - Ref: https://root.cern/manual/fitting/
-- It adjusts 6 parameters (scale, fraction, $\mu$, $\sigma$, $\mu_tail$, $\sigma_tail$) at once to lower $\chi^2$.
+- It adjusts 6 parameters (`scale`, `fraction`, `mu`, `sigma`, `mu_tail`, `sigma_tail`) at once to lower $\chi^2$.
+- Each variable corresponds to: (p0 = `scale`, p1 = `fraction`, p2 = `mu`, p3 = `sigma`, p4 = `mu_tail`, p5 = `sigma_tail`). 
 
 Function `th1_from_series` is defined to optimize the tuning process. Details are in Appendix.
 
