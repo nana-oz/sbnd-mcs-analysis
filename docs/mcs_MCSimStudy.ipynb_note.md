@@ -54,7 +54,24 @@ Double Gaussian fit is performed with a function `dgaus_fitResult = double_gaus_
 
 Function `th1_from_series` is defined to optimize the tuning process. Details are in Appendix.
 
+
 ## Prototype --> Stage 0
+Function `fit_sigma_res(series, sig_H, initSubList, fit_xmin=-500, fit_xmax=500, nbins=1000, rebin=None, sigLims=None)` performs a ROOT double-Gaussian fit on angular residual data and subtracts Multiple Coulomb Scattering (σH​) to extract the detector's intrinsic baseline resolution (σres​).
+- This function is used in later stages
+
+- `sig_res1 = ((sigma_1_0**2) - ((2/3)*(sig_H**2)))**0.5` ... $\sigma_{\text{res1}} = \sqrt{\sigma_1^2 - \frac{2}{3}\sigma^2_H}$
+- `sig_res2 = ((sigma_2_0**2) - ((2/3)*(sig_H**2)))**0.5`
+and
+- `sig_res1_err = ((sigma_1_0*sigma_1_0_err)/(((sigma_1_0**2)-(2/3)*(sig_H**2))**0.5))**0.5`
+- `sig_res2_err = ((sigma_2_0*sigma_2_0_err)/(((sigma_2_0**2)-(2/3)*(sig_H**2))**0.5))**0.5`
+
+then
+- `sigma_1_0` and `sigma_1_0_err` are determined by (the same process as the Prototype):
+  - setting initial guess
+  - then fitting it with `.Fit()` function 
+
+In the paper:
+- $\sigma_{\text{res}} = \sqrt{\sigma_{\text{pred}}^2 - \frac{2}{3}\kappa^2(E_\mu)\sigma^2_H}$
 
 
 ## Stage 0 (Detector Calibration)
@@ -73,10 +90,16 @@ Function `double_gaus_subplots` is set in the stage 0. Inside the function:
   - `mu_mass` ... muon mass in MeV. (`mu_mass_MeV = 105.7`)
   - `E_mean` ... is calculated with `E = (((p**2.)+(mu_mass**2.))**0.5)` where `mu_mass = .1057 #GeV/c^2`, `p` is muon momenta.
 
+
 ### Stage 0 -- Version 3
 Function `double_gaus_stageZero_v3(df, column, energyBounds=[0.1, 0.9], maxBin=[0.7, 1.5], sigLims=None, eStep=0.1, xranges=None, yranges=None, initParams=[], nbins=1000, fitRange=None, errdf=False, core=True, tail=False, rebin=None)`. 
 - Calculation of `sig_H` is the same as v0. `sig_H = 13.6 / (E_mean * (1 - ((mu_mass_MeV**2) / (E_mean**2))))`.
+
+Step:
+- Separate cases into $yz'$ projection ($\theta'_{yz}$) and $xz'$ projection.
+  - $yz'$ is more sensitive to $\vert{}v_x\vert{} \to 0$. --> needs |v_x| binning
 - 
+
 
 ## Stage 1 (Tail Tuning & Physics)
 - Goal: Validate scattering predictions ($\sigma_H$) across energy.
