@@ -6,6 +6,20 @@ $f(\theta; E_{\mu}) =  \frac{A(E_{\mu})}{\sigma_1(E_{\mu})\sqrt{2\pi}}e^{\theta^
 - $\sigma_H \approx \frac{S_2}{p c \beta} = \frac{S_2}{E_\mu \left( 1 - \frac{m^2}{E_\mu^2} \right)}$, where $S_2 = 13.6$ MeV and $m \approx 105.7$ MeV (muon mass)
 
 # What the original `mcs_MCSimStudy.ipynb` contains
+This code contains process of tuning parameters by the following 4 steps:
+1. **Prototype**
+  - Used inline ROOT scripts to test fitting double-Gaussian distributions to angular residuals.
+  - Demonstrated that subtracting Highland MCS scattering ($\sigma_H$) from fitted widths yields detector noise.
+2. **Between Prototype & Stage 0**
+  - Encapsulated inline fitting code into the reusable `fit_sigma_res` engine.
+  - Defined $\vert{}v_x\vert{}$ track-angle binning to handle wire-plane angular anisotropy and signal isochronicity in $yz'$.
+3. **Stage 0** (`fit_sigma_res` + `double_gaus_stageZero_v3`)
+  - Analyzed high-energy data ($0.7\text{--}1.5\text{ GeV}$) where MCS scattering is minimal.
+  - Allowed $\sigma_1$ to float freely in MINUIT fits to extract the baseline intrinsic detector resolution ($\sigma_{\text{res}}$).
+4. **Stage 1** (`sigma1_fit` + `double_gaus_subplots_sigma1`)
+  - Analyzed low-energy data ($0.1\text{--}0.9\text{ GeV}$) sliced by kinetic energy ($E_\mu$).
+  - Locked core width $\sigma_1$ using Stage 0's $\sigma_{\text{res}}$ via `func.FixParameter(3, fixed_sig1)`.
+  - Fitted remaining parameters ($\sigma_2$, area fraction $A$) to validate and tune the MCS physics model scaling factor $\kappa(E_\mu)$.
 
 ## Prototype
 ### Single Gaussian
@@ -107,11 +121,15 @@ Step:
 - Outcome: Low-Energy Model Validation & Tuning ($\chi^2/\text{ndf}$)
 
 Function `sigma1_fit(series,sig_res_arr,sig_H,meanEnergy,nbins=1000,fitRanges=None,initSubList=None,rebin=None)`.
+- Fix the $sigma_1$ and $\kappa$ values by `func.FixParameter(3, fixed_sig1)`:
+  - `kappa = 1.`
+  - `fixed_sig1 = (((2/3)*kappa*sig_H)+sig_res)**0.5`, where `sig_res` is from result of Stage 0, and `sig_H` is input of the function.
+- Then, after fixing the $sigma_1$, find parameter tuning for other params.
 
 
 # Appendix 
 
-### Explanation of how the Root's Optimizer for Fitting work (memo):
+## Explanation of how the Root's Optimizer for Fitting work (memo):
 
 Function Definition & Parameters
 ```
